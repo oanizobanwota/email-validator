@@ -1,7 +1,7 @@
 {
   "name": "email-validator-desktop",
   "productName": "Email Validator",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "description": "Desktop app that checks whether email addresses are well-formed and actually exist (MX + SMTP mailbox probe).",
   "main": "src/main/main.js",
   "type": "commonjs",
@@ -13,7 +13,8 @@
     "dist": "electron-builder --mac --publish never",
     "dist:win": "electron-builder --win --x64 --publish never",
     "dist:linux": "electron-builder --linux --publish never",
-    "dist:all": "electron-builder --mac --win --x64 --arm64 --publish never"
+    "dist:all": "electron-builder --mac --win --x64 --arm64 --publish never",
+    "web": "node src/web/server.js"
   },
   "build": {
     "appId": "com.otawiz.emailvalidator",

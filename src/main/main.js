@@ -5,6 +5,10 @@ const path = require("node:path");
 const fs = require("node:fs/promises");
 const { createSession, checkOutboundSmtp, extractEmails, toCsv, DEFAULTS } = require("./validator");
 
+// No GPU acceleration: over Remote Desktop or in a VM there is no GPU, and Chromium's
+// software fallback repaints burn the CPU and stall the whole RDP session.
+app.disableHardwareAcceleration();
+
 let win = null;
 let activeRun = null; // { id, stop: boolean }
 
@@ -73,7 +77,7 @@ ipcMain.handle("validate-many", async (evt, emails, options) => {
   const session = createSession(options || {});
   const sender = evt.sender;
 
-  // Batch progress so a 10,000-address run sends a few hundred IPC messages, not 10,000.
+  // Batch progress (2–3 screen updates a second): cheap over Remote Desktop, still feels live.
   let pending = [];
   let timer = null;
   const flush = () => {
@@ -86,7 +90,7 @@ ipcMain.handle("validate-many", async (evt, emails, options) => {
     emails,
     (result, index, total, finished) => {
       pending.push({ result, index, finished });
-      if (!timer) timer = setTimeout(flush, 120);
+      if (!timer) timer = setTimeout(flush, 400);
     },
     () => run.stop,
   );

@@ -103,7 +103,7 @@ button:disabled { opacity: .55; cursor: default; }
 .flag { display: inline-block; padding: 1px 7px; border-radius: 6px; font-size: 11px; background: var(--panel-2); border: 1px solid var(--border); color: var(--muted); margin-right: 4px; }
 
 .progress { height: 6px; background: var(--panel-2); border-radius: 999px; margin-top: 12px; overflow: hidden; }
-.progress .bar { height: 100%; width: 0; background: var(--accent); transition: width .15s linear; }
+.progress .bar { height: 100%; width: 0; background: var(--accent); }
 
 .summary { display: flex; gap: 14px; font-size: 13px; color: var(--muted); flex-wrap: wrap; }
 .summary span b { font-weight: 600; }
@@ -133,3 +133,6 @@ footer b { color: var(--text); font-weight: 600; }
 
 .note { margin-top: 10px; padding: 9px 12px; border-radius: 8px; background: var(--panel-2); border: 1px solid var(--border); border-left: 3px solid var(--risky); color: var(--muted); font-size: 13px; }
 #progressText { margin-top: 6px; font-variant-numeric: tabular-nums; }
+
+/* Web version: no macOS traffic-light inset, no draggable region. */
+body.web .titlebar { padding-left: 16px; -webkit-app-region: no-drag; }

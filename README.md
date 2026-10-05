@@ -51,6 +51,21 @@ git push && git push --tags  # the release workflow builds Win/Mac/Linux and att
 
 After the workflow finishes, edit the draft release on GitHub and publish it. Update the version shown in `docs/index.html` when it changes.
 
+## Web version (run it on a server, use it from any browser)
+
+Same engine and same page, served over HTTP from `src/web/server.js`. The checks run on the server, so that is where port 25 must be open — and there is nothing to install on the machines that use it. Running it on your VPS and opening it in a local browser also avoids running Electron over Remote Desktop.
+
+```bash
+WEB_PASSWORD=choose-a-long-secret PORT=8080 npm run web
+```
+
+Then open `http://<server>:8080`, enter the access key once (kept in a cookie for 7 days). Environment: `WEB_PASSWORD` (strongly recommended — without it anyone who finds the port can use it), `PORT` (8080), `HOST` (0.0.0.0), `MAX_EMAILS` per run (20000), `MAX_CONCURRENCY` (30).
+
+- **HTTPS + domain:** put [Caddy](https://caddyserver.com) in front: `caddy reverse-proxy --from validator.scuntore.com --to localhost:8080` (automatic certificate), with the DNS A record pointing at the server.
+- **Keep it running:** Linux — a systemd unit with `ExecStart=/usr/bin/node /opt/email-validator/src/web/server.js` and the env vars in `Environment=`; Windows — install it as a service with [NSSM](https://nssm.cc) (`nssm install EmailValidator "C:\Program Files\nodejs\node.exe" "C:\email-validator\src\web\server.js"`, then set the env vars on the service).
+- **Docker:** `docker build -t email-validator . && docker run -d -p 8080:8080 -e WEB_PASSWORD=secret email-validator`.
+- **Port 25 at hosting providers:** Azure, AWS, Google Cloud and Oracle block outbound 25 by default (request an exception or probing stays off); Hetzner (unblocked on request after the first month), OVH and Contabo allow it. The page header tells you which situation you are in.
+
 ## Command line
 
 The same engine without the window:

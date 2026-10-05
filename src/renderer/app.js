@@ -279,7 +279,7 @@ function updateRows(indices) {
 
 function scheduleSummary() {
   if (summaryTimer) return;
-  summaryTimer = setTimeout(() => { summaryTimer = null; renderSummary(); }, 150);
+  summaryTimer = setTimeout(() => { summaryTimer = null; renderSummary(); }, 500);
 }
 
 function renderSummary() {
