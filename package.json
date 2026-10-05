@@ -1,7 +1,7 @@
 {
   "name": "email-validator-desktop",
   "productName": "Email Validator",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Desktop app that checks whether email addresses are well-formed and actually exist (MX + SMTP mailbox probe).",
   "main": "src/main/main.js",
   "type": "commonjs",
@@ -47,15 +47,15 @@
         "deb"
       ]
     },
-    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+    "artifactName": "Email-Validator-${version}-${os}-${arch}.${ext}",
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
-      "artifactName": "${productName}-Setup-${version}-${arch}.${ext}"
+      "artifactName": "Email-Validator-Setup-${version}-${arch}.${ext}"
     },
     "portable": {
-      "artifactName": "${productName}-Portable-${version}-${arch}.${ext}"
+      "artifactName": "Email-Validator-Portable-${version}-${arch}.${ext}"
     },
     "copyright": "Copyright \u00a9 2026 OtaWIZ"
   },
