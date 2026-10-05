@@ -50,13 +50,16 @@ const TYPO_MAP = {
 const DEFAULTS = {
   smtp: true,              // run the SMTP mailbox probe
   catchAll: true,          // detect catch-all domains (one extra RCPT per domain, cached)
-  connectTimeoutMs: 8000,
-  commandTimeoutMs: 10000,
-  dnsTimeoutMs: 8000,
+  connectTimeoutMs: 5000,
+  commandTimeoutMs: 8000,
+  dnsTimeoutMs: 6000,
+  maxHostsPerDomain: 2,    // MX hosts to try before calling a domain unreachable
+  sessionsPerDomain: 2,    // parallel SMTP connections to one domain (be polite)
+  rcptPerSession: 25,      // addresses checked per connection before reconnecting
   heloHost: defaultHeloHost(),
   fromAddress: null,       // defaults to verify@<heloHost>
   port: 25,
-  concurrency: 5,
+  concurrency: 12,
 };
 
 function defaultHeloHost() {
@@ -229,80 +232,149 @@ function classifyRcpt(reply) {
 }
 
 /**
- * Probe one mail host. Returns { outcome, catchAll, host, detail, transcript }
- * outcome: accepted | rejected | full | blocked | tempfail | connect_failed
+ * One prober per domain for the life of a session. It keeps an SMTP connection
+ * open and checks many addresses through it (one RCPT TO each), instead of a
+ * full connect/EHLO/MAIL FROM handshake per address. It also remembers what it
+ * learned about the domain so later addresses cost nothing:
+ *   - unreachable (no MX answered)            → every address: connect_failed
+ *   - blocked (server refuses our probes)     → every address: blocked
+ *   - catch-all (random mailbox accepted)     → every address: accepted + catchAll
  */
-async function probeHost(host, email, domain, opts, wantCatchAll) {
-  const client = new SmtpClient(host, opts);
-  const out = { host, transcript: client.transcript };
-  try {
-    await client.connect();
-    const banner = await client.read();
-    if (banner.code !== 220) {
-      out.outcome = banner.code >= 500 ? "blocked" : "tempfail";
-      out.detail = `Banner ${banner.code}: ${banner.message}`;
-      return out;
-    }
-    let ehlo = await client.send(`EHLO ${opts.heloHost}`);
-    if (ehlo.code !== 250) ehlo = await client.send(`HELO ${opts.heloHost}`);
-    if (ehlo.code !== 250) {
-      out.outcome = ehlo.code >= 500 ? "blocked" : "tempfail";
-      out.detail = `EHLO ${ehlo.code}: ${ehlo.message}`;
-      return out;
-    }
-    const from = opts.fromAddress || `verify@${opts.heloHost}`;
-    const mf = await client.send(`MAIL FROM:<${from}>`);
-    if (mf.code !== 250) {
-      out.outcome = mf.code >= 500 ? "blocked" : "tempfail";
-      out.detail = `MAIL FROM ${mf.code}: ${mf.message}`;
-      return out;
-    }
-    const rcpt = await client.send(`RCPT TO:<${email}>`);
-    const cls = classifyRcpt(rcpt);
-    out.outcome = cls.result;
-    out.detail = `RCPT ${rcpt.code}: ${rcpt.message}`;
-    out.code = rcpt.code;
+class DomainProber {
+  constructor(domain, hosts, opts) {
+    this.domain = domain;
+    this.hosts = hosts.slice(0, opts.maxHostsPerDomain);
+    this.opts = opts;
+    this.queue = [];
+    this.active = 0;
+    this.catchAll = opts.catchAll ? undefined : null;
+    this.unreachable = null;
+    this.blocked = null;
+    this.drops = 0;
+    this.host = null;
+  }
 
-    if (wantCatchAll && cls.result === "accepted") {
-      const rand = `${crypto.randomBytes(9).toString("hex")}-probe@${domain}`;
-      try {
-        const r2 = await client.send(`RCPT TO:<${rand}>`);
-        out.catchAll = classifyRcpt(r2).result === "accepted";
-      } catch { out.catchAll = null; }
+  check(email) {
+    return new Promise((resolve) => {
+      this.queue.push({ email, resolve });
+      this._pump();
+    });
+  }
+
+  _pump() {
+    // Open another connection only when more addresses are waiting than sessions already serving them.
+    while (this.active < this.opts.sessionsPerDomain && this.queue.length > this.active) {
+      this.active++;
+      this._session().catch(() => {}).finally(() => { this.active--; this._pump(); });
     }
-    return out;
-  } catch (err) {
-    out.outcome = "connect_failed";
-    out.detail = `${err.code || "ERR"}: ${err.message}`;
-    out.errorCode = err.code;
-    return out;
-  } finally {
-    await client.end();
+  }
+
+  _drainFast() {
+    if (this.unreachable) return this._drain({ outcome: "connect_failed", detail: this.unreachable, errorCode: this.unreachableCode, host: this.host });
+    if (this.blocked) return this._drain({ outcome: "blocked", detail: this.blocked, host: this.host });
+    if (this.catchAll === true) return this._drain({ outcome: "accepted", detail: "Domain is catch-all (not probed)", host: this.host, catchAll: true });
+    return false;
+  }
+
+  _drain(result) {
+    const jobs = this.queue.splice(0);
+    for (const j of jobs) j.resolve({ ...result });
+    return true;
+  }
+
+  async _open() {
+    let lastErr = null;
+    for (const host of this.hosts) {
+      const client = new SmtpClient(host, this.opts);
+      try {
+        await client.connect();
+        const banner = await client.read();
+        if (banner.code !== 220) { lastErr = { kind: banner.code >= 500 ? "blocked" : "tempfail", detail: `Banner ${banner.code}: ${banner.message}` }; await client.end(); continue; }
+        let ehlo = await client.send(`EHLO ${this.opts.heloHost}`);
+        if (ehlo.code !== 250) ehlo = await client.send(`HELO ${this.opts.heloHost}`);
+        if (ehlo.code !== 250) { lastErr = { kind: ehlo.code >= 500 ? "blocked" : "tempfail", detail: `EHLO ${ehlo.code}: ${ehlo.message}` }; await client.end(); continue; }
+        const from = this.opts.fromAddress || `verify@${this.opts.heloHost}`;
+        const mf = await client.send(`MAIL FROM:<${from}>`);
+        if (mf.code !== 250) { lastErr = { kind: mf.code >= 500 ? "blocked" : "tempfail", detail: `MAIL FROM ${mf.code}: ${mf.message}` }; await client.end(); continue; }
+        this.host = host;
+        return client;
+      } catch (err) {
+        lastErr = { kind: "connect", detail: `${err.code || "ERR"}: ${err.message}`, code: err.code };
+        await client.end();
+      }
+    }
+    if (lastErr?.kind === "blocked") this.blocked = lastErr.detail;
+    else if (lastErr?.kind === "tempfail") this._drain({ outcome: "tempfail", detail: lastErr.detail, host: this.hosts[0] });
+    else { this.unreachable = lastErr?.detail || "no hosts"; this.unreachableCode = lastErr?.code; }
+    return null;
+  }
+
+  async _session() {
+    if (this._drainFast()) return;
+    const client = await this._open();
+    if (!client) { this._drainFast(); return; }
+    let n = 0;
+    try {
+      while (this.queue.length && n < this.opts.rcptPerSession) {
+        if (this._drainFast()) return;
+        const job = this.queue.shift();
+        n++;
+        let rcpt;
+        try {
+          rcpt = await client.send(`RCPT TO:<${job.email}>`);
+        } catch (err) {
+          // Connection dropped mid-session: put the job back and start a fresh session,
+          // unless the server keeps dropping us.
+          this.queue.unshift(job);
+          if (++this.drops >= 3) { this.unreachable = `${err.code || "ERR"}: ${err.message} (repeatedly dropped)`; this.unreachableCode = err.code; }
+          return;
+        }
+        if (rcpt.code === 452 || (rcpt.code >= 400 && /too many recipients/i.test(rcpt.message))) {
+          this.queue.unshift(job);   // session limit reached, continue on a new connection
+          return;
+        }
+        const cls = classifyRcpt(rcpt);
+        const out = { outcome: cls.result, detail: `RCPT ${rcpt.code}: ${rcpt.message}`, code: rcpt.code, host: this.host, catchAll: this.catchAll ?? null };
+        if (cls.result === "accepted" && this.catchAll === undefined) {
+          const rand = `${crypto.randomBytes(9).toString("hex")}-probe@${this.domain}`;
+          try {
+            const r2 = await client.send(`RCPT TO:<${rand}>`);
+            this.catchAll = classifyRcpt(r2).result === "accepted";
+          } catch { this.catchAll = null; }
+          out.catchAll = this.catchAll;
+        }
+        if (cls.result === "blocked") this.blocked = cls.detail || out.detail;
+        job.resolve(out);
+        if (this.blocked) return;
+      }
+    } finally {
+      await client.end();
+    }
   }
 }
 
-async function probeSmtp(hosts, email, domain, opts, wantCatchAll) {
-  const attempts = [];
-  for (const host of hosts.slice(0, 3)) {
-    const r = await probeHost(host, email, domain, opts, wantCatchAll);
-    attempts.push(r);
-    // Only move to the next MX if this one could not be reached at all.
-    if (r.outcome !== "connect_failed") return { ...r, attempts };
-  }
-  const last = attempts[attempts.length - 1];
-  return { ...last, attempts };
+/** Single-shot probe (used by tests and quick checks). */
+function probeSmtp(hosts, email, domain, opts, wantCatchAll = true) {
+  const full = { ...DEFAULTS, ...opts, catchAll: wantCatchAll };
+  return new DomainProber(domain, hosts, full).check(email);
 }
 
 // ---------- orchestration ---------------------------------------------------
 
 function createSession(userOpts = {}) {
   const opts = { ...DEFAULTS, ...userOpts };
-  const dnsCache = new Map();      // domain -> resolveMailHosts result
-  const catchAllCache = new Map(); // domain -> true | false | null
+  const dnsCache = new Map();    // domain -> Promise<resolveMailHosts result>
+  const probers = new Map();     // domain -> DomainProber
 
-  async function lookupDomain(domain) {
+  function lookupDomain(domain) {
     if (!dnsCache.has(domain)) dnsCache.set(domain, resolveMailHosts(domain, opts));
     return dnsCache.get(domain);
+  }
+
+  function proberFor(domain, hosts) {
+    let p = probers.get(domain);
+    if (!p) { p = new DomainProber(domain, hosts, opts); probers.set(domain, p); }
+    return p;
   }
 
   async function validateEmail(raw) {
@@ -325,6 +397,7 @@ function createSession(userOpts = {}) {
       elapsedMs: 0,
     };
     const done = () => { result.elapsedMs = Date.now() - started; return result; };
+    const hint = () => { if (result.suggestion) result.reason += ` — did you mean ${result.suggestion}?`; };
 
     const syn = checkSyntax(result.email);
     if (!syn.ok) {
@@ -345,32 +418,36 @@ function createSession(userOpts = {}) {
     if (!dnsRes.ok) {
       result.status = dnsRes.transient ? "unknown" : "invalid";
       result.reason = dnsRes.reason;
+      hint();
+      return done();
+    }
+
+    // A disposable mailbox is "risky" whatever the server says — don't spend a probe on it.
+    if (result.disposable) {
+      result.smtp = "skipped";
+      result.status = "risky";
+      result.reason = "Disposable email provider";
+      hint();
       return done();
     }
 
     if (!opts.smtp) {
       result.smtp = "skipped";
-      if (result.disposable) { result.status = "risky"; result.reason = "Disposable email provider"; }
-      else { result.status = "unknown"; result.reason = "Syntax and mail servers OK (mailbox not probed)"; }
-      if (result.suggestion) result.reason += ` — did you mean ${result.suggestion}?`;
+      result.status = "unknown";
+      result.reason = "Syntax and mail servers OK (mailbox not probed)";
+      hint();
       return done();
     }
 
-    const cached = catchAllCache.get(syn.domain);
-    const wantCatchAll = opts.catchAll && cached === undefined;
-    const probe = await probeSmtp(dnsRes.hosts, syn.normalized, syn.domain, opts, wantCatchAll);
+    const probe = await proberFor(syn.domain, dnsRes.hosts).check(syn.normalized);
     result.smtp = probe.outcome;
     result.smtpDetail = probe.detail || "";
     result.smtpHost = probe.host;
-    if (wantCatchAll && probe.outcome === "accepted" && typeof probe.catchAll === "boolean") {
-      catchAllCache.set(syn.domain, probe.catchAll);
-    }
-    result.catchAll = catchAllCache.get(syn.domain) ?? (probe.outcome === "accepted" ? probe.catchAll ?? null : null);
+    result.catchAll = probe.catchAll ?? null;
 
     switch (probe.outcome) {
       case "accepted":
-        if (result.disposable) { result.status = "risky"; result.reason = "Mailbox exists but the provider is disposable"; }
-        else if (result.catchAll) { result.status = "risky"; result.reason = "Domain accepts every address (catch-all) — mailbox cannot be confirmed"; }
+        if (result.catchAll) { result.status = "risky"; result.reason = "Domain accepts every address (catch-all) — mailbox cannot be confirmed"; }
         else { result.status = "valid"; result.reason = result.role ? "Mailbox exists (role account)" : "Mailbox exists"; }
         break;
       case "rejected":
@@ -392,33 +469,44 @@ function createSession(userOpts = {}) {
       case "connect_failed":
       default:
         result.status = "unknown";
-        result.reason = probe.errorCode === "ETIMEOUT" || probe.errorCode === "ECONNREFUSED" || probe.errorCode === "EHOSTUNREACH"
+        result.reason = ["ETIMEOUT", "ECONNREFUSED", "EHOSTUNREACH", "ENETUNREACH"].includes(probe.errorCode)
           ? "Could not reach the mail server on port 25 (your network may block outbound SMTP)"
           : `Could not reach the mail server (${probe.detail})`;
         break;
     }
-    if (result.disposable && result.status !== "invalid") {
-      result.status = "risky";
-      if (!/disposable/i.test(result.reason)) result.reason = "Disposable email provider — " + result.reason;
-    }
-    if (result.suggestion) result.reason += ` — did you mean ${result.suggestion}?`;
+    hint();
     return done();
   }
 
   /**
-   * Validate many addresses with bounded concurrency.
-   * onProgress(result, index, total) is called as each finishes; order of
-   * callbacks is completion order, the returned array keeps input order.
+   * Validate many addresses with bounded concurrency. Work is interleaved by
+   * domain so that at any moment the in-flight set spans many mail servers
+   * instead of queueing behind one; results are returned in input order.
+   * onProgress(result, index, total, finished) fires in completion order.
    */
   async function validateMany(emails, onProgress, shouldStop) {
     const list = Array.from(emails);
+    const byDomain = new Map();
+    list.forEach((e, i) => {
+      const syn = checkSyntax(e);
+      const key = syn.ok ? syn.domain : "";
+      if (!byDomain.has(key)) byDomain.set(key, []);
+      byDomain.get(key).push(i);
+    });
+    const order = [];
+    const lanes = Array.from(byDomain.values());
+    for (let more = true; more;) {
+      more = false;
+      for (const lane of lanes) if (lane.length) { order.push(lane.shift()); more = true; }
+    }
+
     const results = new Array(list.length);
     let next = 0;
     let finished = 0;
     const worker = async () => {
-      while (next < list.length) {
+      while (next < order.length) {
         if (shouldStop && shouldStop()) return;
-        const i = next++;
+        const i = order[next++];
         results[i] = await validateEmail(list[i]);
         finished++;
         if (onProgress) onProgress(results[i], i, list.length, finished);
@@ -476,6 +564,6 @@ function toCsv(results) {
 }
 
 module.exports = {
-  DEFAULTS, checkSyntax, resolveMailHosts, probeSmtp, classifyRcpt,
+  DEFAULTS, checkSyntax, resolveMailHosts, probeSmtp, classifyRcpt, DomainProber,
   createSession, checkOutboundSmtp, extractEmails, toCsv,
 };

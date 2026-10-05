@@ -52,13 +52,26 @@ ipcMain.handle("validate-many", async (evt, emails, options) => {
   activeRun = run;
   const session = createSession(options || {});
   const sender = evt.sender;
+
+  // Batch progress so a 10,000-address run sends a few hundred IPC messages, not 10,000.
+  let pending = [];
+  let timer = null;
+  const flush = () => {
+    timer = null;
+    if (!pending.length || sender.isDestroyed()) { pending = []; return; }
+    sender.send("progress", { runId: run.id, items: pending, total: emails.length });
+    pending = [];
+  };
   const results = await session.validateMany(
     emails,
     (result, index, total, finished) => {
-      if (!sender.isDestroyed()) sender.send("progress", { runId: run.id, result, index, total, finished });
+      pending.push({ result, index, finished });
+      if (!timer) timer = setTimeout(flush, 120);
     },
     () => run.stop,
   );
+  if (timer) clearTimeout(timer);
+  flush();
   if (activeRun === run) activeRun = null;
   return { runId: run.id, results, stopped: run.stop };
 });

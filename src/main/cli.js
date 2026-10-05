@@ -33,11 +33,13 @@ async function main() {
   if (!emails.length) { console.error("No emails given. --help for usage."); process.exit(2); }
 
   const session = createSession(opts);
+  const t0 = Date.now();
   const results = await session.validateMany(emails, csv ? null : (r) => {
     const flags = [r.disposable && "disposable", r.role && "role", r.catchAll && "catch-all"].filter(Boolean).join(",");
     console.log(`${r.status.padEnd(8)} ${r.email.padEnd(40)} ${r.reason}${flags ? `  [${flags}]` : ""}  (${r.elapsedMs} ms)`);
   });
   if (csv) process.stdout.write(toCsv(results));
+  else console.error(`${results.length} addresses in ${((Date.now() - t0) / 1000).toFixed(1)} s`);
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });

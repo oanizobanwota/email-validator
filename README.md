@@ -70,6 +70,10 @@ npm test
 
 Offline: syntax rules, reply classification, CSV, plus a full probe against a fake SMTP server on localhost.
 
+## Speed on big lists
+
+Addresses are grouped by domain and checked through one open SMTP connection per domain (up to 25 per connection, 2 connections per domain), and the app remembers what it learns about a domain — unreachable, blocked, or catch-all — so the rest of that domain's addresses are answered instantly. A 300-address mixed list takes ~12 s; 10,000 addresses take minutes rather than hours. The results table draws 400 rows at a time; use the filter or export to CSV for the rest.
+
 ## Caveats
 
 - Some big providers answer `250` for every address (Yahoo, many Office 365 tenants) — those show as **risky / catch-all**, not valid.

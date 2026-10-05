@@ -16,6 +16,10 @@ const els = {
 let results = [];      // current bulk results (input order)
 let running = false;
 let currentRunId = null;
+const counts = { valid: 0, invalid: 0, risky: 0, unknown: 0, pending: 0 };
+const ROW_CAP = 400;   // rows drawn at once; the rest are reachable through the filter / export
+let shown = 0;         // how many matching rows are currently drawn
+let summaryTimer = null;
 
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
@@ -23,7 +27,7 @@ function options() {
   return {
     smtp: els.optSmtp.checked,
     catchAll: els.optCatchAll.checked,
-    concurrency: Math.max(1, Math.min(20, parseInt(els.optConc.value, 10) || 5)),
+    concurrency: Math.max(1, Math.min(50, parseInt(els.optConc.value, 10) || 12)),
   };
 }
 
@@ -93,7 +97,7 @@ function renderSingle(r) {
 let countTimer = null;
 els.bulkInput.addEventListener("input", () => {
   clearTimeout(countTimer);
-  countTimer = setTimeout(updateCount, 200);
+  countTimer = setTimeout(updateCount, 400);
 });
 async function updateCount() {
   const list = await api.extractEmails(els.bulkInput.value);
@@ -126,6 +130,8 @@ els.stopBtn.addEventListener("click", () => { api.stop(); els.stopBtn.disabled =
 async function startRun(emails) {
   running = true;
   results = emails.map((email) => ({ email, status: "pending", reason: "", mxHosts: [], elapsedMs: null }));
+  counts.valid = counts.invalid = counts.risky = counts.unknown = 0;
+  counts.pending = results.length;
   els.runBtn.disabled = true;
   els.stopBtn.classList.remove("hidden");
   els.stopBtn.disabled = false;
@@ -137,8 +143,8 @@ async function startRun(emails) {
   try {
     const res = await api.validateMany(emails, options());
     currentRunId = res.runId;
-    res.results.forEach((r, i) => { if (r) results[i] = r; });
-    results.forEach((r) => { if (r.status === "pending") { r.status = "unknown"; r.reason = "Stopped before this address was checked"; } });
+    res.results.forEach((r, i) => { if (r) applyResult(i, r); });
+    results.forEach((r, i) => { if (r.status === "pending") applyResult(i, { ...r, status: "unknown", reason: "Stopped before this address was checked" }); });
   } catch (err) {
     alert("Validation failed: " + err.message);
   } finally {
@@ -152,12 +158,25 @@ async function startRun(emails) {
   }
 }
 
-api.onProgress(({ result, index, total, finished }) => {
+function applyResult(i, r) {
+  const prev = results[i];
+  if (prev && counts[prev.status] !== undefined) counts[prev.status]--;
+  results[i] = r;
+  counts[r.status] = (counts[r.status] || 0) + 1;
+}
+
+api.onProgress(({ items, total }) => {
   if (!running) return;
-  results[index] = result;
+  let finished = 0;
+  const touched = [];
+  for (const { result, index, finished: f } of items) {
+    applyResult(index, result);
+    touched.push(index);
+    finished = Math.max(finished, f);
+  }
   els.bar.style.width = `${Math.round((finished / total) * 100)}%`;
-  updateRow(index);
-  renderSummary();
+  updateRows(touched);
+  scheduleSummary();
 });
 
 function rowHtml(r, i) {
@@ -179,25 +198,56 @@ function visible(r) {
 
 function renderTable() {
   const rows = [];
-  results.forEach((r, i) => {
-    if (!visible(r)) return;
+  shown = 0;
+  for (let i = 0; i < results.length && shown < ROW_CAP; i++) {
+    const r = results[i];
+    if (!visible(r)) continue;
     rows.push(`<tr data-i="${i}" class="${r.status === "pending" ? "pending" : ""}">${rowHtml(r, i)}</tr>`);
-  });
+    shown++;
+  }
   els.tbody.innerHTML = rows.join("");
+  renderCapNote();
 }
 
-function updateRow(i) {
-  const tr = els.tbody.querySelector(`tr[data-i="${i}"]`);
-  const r = results[i];
-  if (!tr) { if (visible(r)) renderTable(); return; }
-  if (!visible(r)) { tr.remove(); return; }
-  tr.className = "";
-  tr.innerHTML = rowHtml(r, i);
+function renderCapNote() {
+  const matching = els.filter.value === "all" ? results.length : (counts[els.filter.value] || 0);
+  let note = document.getElementById("capNote");
+  if (!note) {
+    note = document.createElement("div");
+    note.id = "capNote";
+    note.className = "muted";
+    note.style.padding = "8px 10px";
+    els.tbody.parentElement.parentElement.appendChild(note);
+  }
+  note.textContent = matching > shown ? `Showing the first ${shown} of ${matching} matching rows — narrow with the filter, or export everything to CSV.` : "";
+}
+
+// Update only rows that are drawn; rows beyond the cap are counted but not painted.
+function updateRows(indices) {
+  if (!indices.length) return;
+  const f = els.filter.value;
+  for (const i of indices) {
+    const r = results[i];
+    const tr = els.tbody.querySelector(`tr[data-i="${i}"]`);
+    if (tr) {
+      if (!visible(r)) { tr.remove(); shown--; continue; }
+      tr.className = "";
+      tr.innerHTML = rowHtml(r, i);
+    } else if (f !== "all" && visible(r) && shown < ROW_CAP) {
+      els.tbody.insertAdjacentHTML("beforeend", `<tr data-i="${i}">${rowHtml(r, i)}</tr>`);
+      shown++;
+    }
+  }
+  renderCapNote();
+}
+
+function scheduleSummary() {
+  if (summaryTimer) return;
+  summaryTimer = setTimeout(() => { summaryTimer = null; renderSummary(); }, 150);
 }
 
 function renderSummary() {
-  const c = { valid: 0, invalid: 0, risky: 0, unknown: 0, pending: 0 };
-  for (const r of results) c[r.status] = (c[r.status] || 0) + 1;
+  const c = counts;
   els.summary.innerHTML = `
     <span class="valid"><b>${c.valid}</b> valid</span>
     <span class="invalid"><b>${c.invalid}</b> invalid</span>

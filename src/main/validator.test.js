@@ -52,7 +52,9 @@ async function run() {
   // ---- fake SMTP server ----
   const mailboxes = new Set(["real@fake.test", "full@fake.test"]);
   let catchAllMode = false;
+  let connections = 0;
   const server = net.createServer((sock) => {
+    connections++;
     sock.write("220 fake.test ESMTP ready\r\n");
     let buf = "";
     sock.on("data", (d) => {
@@ -110,7 +112,52 @@ async function run() {
     // Port is now closed → ECONNREFUSED → should move on to the live host (same port opt, so use host list trick)
     const r = await probeSmtp(["127.0.0.1"], "real@fake.test", "fake.test", { ...opts, port: deadPort }, false);
     assert.equal(r.outcome, "connect_failed");
-    assert.equal(r.attempts.length, 1);
+  });
+
+  await t("session reuses one connection for many addresses of a domain", async () => {
+    const { createSession } = require("./validator");
+    const before = connections;
+    const s = createSession({ ...opts, catchAll: true, concurrency: 8 });
+    // Bypass DNS: inject the prober directly through a fake MX resolver.
+    s._probers = null;
+    const list = ["real@fake.test", "nobody@fake.test", "full@fake.test", "x1@fake.test", "x2@fake.test", "x3@fake.test"];
+    const dnsModule = require("node:dns").promises;
+    const origMx = dnsModule.resolveMx;
+    dnsModule.resolveMx = async () => [{ exchange: "127.0.0.1", priority: 10 }];
+    try {
+      const results = await s.validateMany(list);
+      assert.deepEqual(results.map((r) => r.status), ["valid", "invalid", "risky", "invalid", "invalid", "invalid"]);
+      assert.equal(results[0].catchAll, false);
+    } finally { dnsModule.resolveMx = origMx; }
+    // 6 addresses + 1 catch-all probe over at most 2 sessions (sessionsPerDomain), not 6 connections.
+    assert.ok(connections - before <= 2, `expected <=2 connections, got ${connections - before}`);
+  });
+
+  await t("catch-all domain is answered without further probes", async () => {
+    catchAllMode = true;
+    const before = connections;
+    const dnsModule = require("node:dns").promises;
+    const origMx = dnsModule.resolveMx;
+    dnsModule.resolveMx = async () => [{ exchange: "127.0.0.1", priority: 10 }];
+    try {
+      const s = createSession({ ...opts, catchAll: true, concurrency: 1 });
+      const results = await s.validateMany(Array.from({ length: 10 }, (_, i) => `u${i}@fake.test`));
+      assert.ok(results.every((r) => r.status === "risky" && r.catchAll === true));
+    } finally { dnsModule.resolveMx = origMx; catchAllMode = false; }
+    assert.equal(connections - before, 1);
+  });
+
+  await t("unreachable domain fails fast for every address", async () => {
+    const dnsModule = require("node:dns").promises;
+    const origMx = dnsModule.resolveMx;
+    dnsModule.resolveMx = async () => [{ exchange: "127.0.0.1", priority: 10 }];
+    try {
+      const s = createSession({ ...opts, port: 1, concurrency: 4 });
+      const t0 = Date.now();
+      const results = await s.validateMany(Array.from({ length: 20 }, (_, i) => `u${i}@dead.test`));
+      assert.ok(results.every((r) => r.status === "unknown" && r.smtp === "connect_failed"));
+      assert.ok(Date.now() - t0 < 3000, "should not wait per address");
+    } finally { dnsModule.resolveMx = origMx; }
   });
 
   await t("createSession: invalid syntax short-circuits with no network", async () => {

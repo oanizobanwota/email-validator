@@ -40,13 +40,13 @@
   <h1>Check that an email address is real before you send to it.</h1>
   <p class="lead">A desktop app for Windows and macOS. Paste one address or a whole list, and find out which ones are well-formed, which mailboxes actually exist, and which are throw-away or catch-all.</p>
 
-  <a class="primary" id="primary" href="https://github.com/oanizobanwota/email-validator/releases/latest/download/Email-Validator-Setup-1.0.0-x64.exe" download>
-    <span>⬇</span> <span>Download for Windows <small id="primaryMeta">· 64-bit installer · v1.0.0</small></span>
+  <a class="primary" id="primary" href="https://github.com/oanizobanwota/email-validator/releases/latest/download/Email-Validator-Setup-1.0.1-x64.exe" download>
+    <span>⬇</span> <span>Download for Windows <small id="primaryMeta">· 64-bit installer · v1.0.1</small></span>
   </a>
   <p class="others" id="others">
-    Also: <a href="https://github.com/oanizobanwota/email-validator/releases/latest/download/Email-Validator-Portable-1.0.0-x64.exe" download>Windows portable (no install)</a> ·
-    <a href="https://github.com/oanizobanwota/email-validator/releases/latest/download/Email-Validator-1.0.0-mac-arm64.dmg" download>macOS Apple Silicon</a> ·
-    <a href="https://github.com/oanizobanwota/email-validator/releases/latest/download/Email-Validator-1.0.0-mac-x64.dmg" download>macOS Intel</a>
+    Also: <a href="https://github.com/oanizobanwota/email-validator/releases/latest/download/Email-Validator-Portable-1.0.1-x64.exe" download>Windows portable (no install)</a> ·
+    <a href="https://github.com/oanizobanwota/email-validator/releases/latest/download/Email-Validator-1.0.1-mac-arm64.dmg" download>macOS Apple Silicon</a> ·
+    <a href="https://github.com/oanizobanwota/email-validator/releases/latest/download/Email-Validator-1.0.1-mac-x64.dmg" download>macOS Intel</a>
   </p>
 
   <div class="grid">
@@ -77,7 +77,7 @@
 
   <div class="note"><b>Networks that block port 25.</b> Mailbox existence is checked over SMTP. Some home and office networks block outbound port 25; the app shows this in its header, and those checks then come back as "unknown" while syntax and mail-server checks still work.</div>
 
-  <footer><a href="https://github.com/oanizobanwota/email-validator" style="color:inherit">Source code and all releases on GitHub</a> · Email Validator v1.0.0 · Windows 10/11 (64-bit) · macOS 11+ · No account, no upload: everything runs on your own computer.</footer>
+  <footer><a href="https://github.com/oanizobanwota/email-validator" style="color:inherit">Source code and all releases on GitHub</a> · Email Validator v1.0.1 · Windows 10/11 (64-bit) · macOS 11+ · No account, no upload: everything runs on your own computer.</footer>
 </main>
 <script>
   // Point the big button at the visitor's own platform.
@@ -85,11 +85,11 @@
     var ua = navigator.userAgent, p = document.getElementById('primary'), m = document.getElementById('primaryMeta');
     if (/Macintosh|Mac OS X/.test(ua)) {
       // Apple Silicon Macs still report Intel in the UA; default to arm64 and offer Intel below.
-      p.href = 'https://github.com/oanizobanwota/email-validator/releases/latest/download/Email-Validator-1.0.0-mac-arm64.dmg';
+      p.href = 'https://github.com/oanizobanwota/email-validator/releases/latest/download/Email-Validator-1.0.1-mac-arm64.dmg';
       p.lastElementChild.firstChild.textContent = 'Download for macOS ';
-      m.textContent = '· Apple Silicon · v1.0.0';
+      m.textContent = '· Apple Silicon · v1.0.1';
     } else if (/Windows/.test(ua) && /ARM64|aarch64/i.test(ua)) {
-      m.textContent = '· 64-bit installer (x64 runs on ARM too) · v1.0.0';
+      m.textContent = '· 64-bit installer (x64 runs on ARM too) · v1.0.1';
     }
   })();
 </script>
