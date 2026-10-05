@@ -1,7 +1,7 @@
 {
   "name": "email-validator-desktop",
   "productName": "Email Validator",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Desktop app that checks whether email addresses are well-formed and actually exist (MX + SMTP mailbox probe).",
   "main": "src/main/main.js",
   "type": "commonjs",
@@ -56,14 +56,15 @@
     },
     "portable": {
       "artifactName": "${productName}-Portable-${version}-${arch}.${ext}"
-    }
+    },
+    "copyright": "Copyright \u00a9 2026 OtaWIZ"
   },
   "devDependencies": {
     "electron": "^33.0.0",
     "electron-builder": "^25.1.8"
   },
   "author": {
-    "name": "GoCom Synergy",
+    "name": "OtaWIZ",
     "email": "oanizobanwota@gmail.com"
   },
   "repository": {
