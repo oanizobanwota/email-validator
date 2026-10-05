@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;" />
+  <title>Email Validator</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="titlebar">
+    <div class="brand">
+      <span class="logo">@</span>
+      <span>Email Validator</span>
+    </div>
+    <div class="net" id="net" title="Whether this network allows outbound SMTP (port 25). Without it, mailbox existence cannot be probed.">
+      <span class="dot"></span><span id="netText">Checking network…</span>
+    </div>
+  </header>
+
+  <main>
+    <section class="panel single">
+      <h2>Check one address</h2>
+      <form id="singleForm" class="row">
+        <input id="singleInput" type="text" placeholder="name@example.com" autocomplete="off" spellcheck="false" />
+        <button type="submit" class="primary" id="singleBtn">Validate</button>
+      </form>
+      <div id="singleResult" class="single-result hidden"></div>
+    </section>
+
+    <section class="panel bulk">
+      <div class="panel-head">
+        <h2>Check a list</h2>
+        <div class="actions">
+          <button id="importBtn" type="button">Import file…</button>
+          <button id="clearBtn" type="button">Clear</button>
+        </div>
+      </div>
+      <textarea id="bulkInput" placeholder="Paste addresses here — one per line, comma-separated, or any text containing emails (CSV exports work too)."></textarea>
+      <div class="row between">
+        <div class="options">
+          <label><input type="checkbox" id="optSmtp" checked /> Probe mailbox (SMTP)</label>
+          <label><input type="checkbox" id="optCatchAll" checked /> Detect catch-all</label>
+          <label>Parallel <input type="number" id="optConc" min="1" max="20" value="5" /></label>
+        </div>
+        <div class="actions">
+          <span id="count" class="muted">0 addresses</span>
+          <button id="stopBtn" type="button" class="hidden">Stop</button>
+          <button id="runBtn" type="button" class="primary">Validate list</button>
+        </div>
+      </div>
+      <div class="progress hidden" id="progress"><div class="bar" id="bar"></div></div>
+    </section>
+
+    <section class="panel results hidden" id="resultsPanel">
+      <div class="panel-head">
+        <h2>Results</h2>
+        <div class="summary" id="summary"></div>
+        <div class="actions">
+          <select id="filter">
+            <option value="all">All</option>
+            <option value="valid">Valid</option>
+            <option value="invalid">Invalid</option>
+            <option value="risky">Risky</option>
+            <option value="unknown">Unknown</option>
+          </select>
+          <button id="copyValidBtn" type="button">Copy valid</button>
+          <button id="exportBtn" type="button">Export CSV…</button>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table id="table">
+          <thead>
+            <tr><th>#</th><th>Email</th><th>Status</th><th>Reason</th><th>Flags</th><th>MX</th><th>ms</th></tr>
+          </thead>
+          <tbody id="tbody"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <span><b>valid</b> mailbox confirmed · <b>invalid</b> cannot receive mail · <b>risky</b> deliverable but unreliable (disposable, catch-all, full) · <b>unknown</b> server would not confirm</span>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

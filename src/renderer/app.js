@@ -1,0 +1,237 @@
+"use strict";
+
+const $ = (id) => document.getElementById(id);
+const api = window.validator;
+
+const els = {
+  net: $("net"), netText: $("netText"),
+  singleForm: $("singleForm"), singleInput: $("singleInput"), singleBtn: $("singleBtn"), singleResult: $("singleResult"),
+  bulkInput: $("bulkInput"), importBtn: $("importBtn"), clearBtn: $("clearBtn"), count: $("count"),
+  optSmtp: $("optSmtp"), optCatchAll: $("optCatchAll"), optConc: $("optConc"),
+  runBtn: $("runBtn"), stopBtn: $("stopBtn"), progress: $("progress"), bar: $("bar"),
+  resultsPanel: $("resultsPanel"), summary: $("summary"), filter: $("filter"), tbody: $("tbody"),
+  copyValidBtn: $("copyValidBtn"), exportBtn: $("exportBtn"),
+};
+
+let results = [];      // current bulk results (input order)
+let running = false;
+let currentRunId = null;
+
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+function options() {
+  return {
+    smtp: els.optSmtp.checked,
+    catchAll: els.optCatchAll.checked,
+    concurrency: Math.max(1, Math.min(20, parseInt(els.optConc.value, 10) || 5)),
+  };
+}
+
+function flagsHtml(r) {
+  const f = [];
+  if (r.disposable) f.push("disposable");
+  if (r.role) f.push("role");
+  if (r.catchAll) f.push("catch-all");
+  if (r.suggestion) f.push("typo?");
+  if (r.smtp === "full") f.push("full");
+  return f.map((x) => `<span class="flag">${x}</span>`).join("");
+}
+
+// ---------- network indicator ----------
+async function checkNetwork() {
+  try {
+    const r = await api.checkNetwork();
+    els.net.classList.toggle("ok", r.ok);
+    els.net.classList.toggle("bad", !r.ok);
+    els.netText.textContent = r.ok ? "Outbound SMTP OK — mailboxes can be probed" : "Port 25 blocked — only syntax + DNS checks will be conclusive";
+  } catch {
+    els.netText.textContent = "Network check failed";
+  }
+}
+
+// ---------- single ----------
+els.singleForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const email = els.singleInput.value.trim();
+  if (!email) return;
+  els.singleBtn.disabled = true;
+  els.singleResult.classList.remove("hidden");
+  els.singleResult.innerHTML = `<div class="head"><span class="badge checking">checking…</span><span class="email">${esc(email)}</span></div>`;
+  try {
+    const r = await api.validateOne(email, options());
+    renderSingle(r);
+  } catch (err) {
+    els.singleResult.innerHTML = `<div class="head"><span class="badge unknown">error</span><span>${esc(err.message)}</span></div>`;
+  } finally {
+    els.singleBtn.disabled = false;
+  }
+});
+
+function renderSingle(r) {
+  const yn = (v) => (v === true ? "yes" : v === false ? "no" : "—");
+  els.singleResult.innerHTML = `
+    <div class="head"><span class="badge ${r.status}">${r.status}</span><span class="email">${esc(r.email)}</span>${flagsHtml(r)}</div>
+    <div class="reason">${esc(r.reason)}</div>
+    <div class="checks">
+      <div>Syntax: <b>${yn(r.syntax)}</b></div>
+      <div>Mail servers (MX): <b>${yn(r.mx)}</b></div>
+      <div>SMTP probe: <b>${esc(r.smtp || "—")}</b></div>
+      <div>Catch-all domain: <b>${yn(r.catchAll)}</b></div>
+      <div>Disposable: <b>${yn(r.disposable)}</b></div>
+      <div>Role account: <b>${yn(r.role)}</b></div>
+      <div>Time: <b>${r.elapsedMs} ms</b></div>
+    </div>
+    ${r.mxHosts?.length || r.smtpDetail ? `<details><summary>Details</summary><pre>${esc([
+      r.mxHosts?.length ? "MX: " + r.mxHosts.join(", ") : "",
+      r.smtpHost ? "Probed: " + r.smtpHost : "",
+      r.smtpDetail ? "Reply: " + r.smtpDetail : "",
+    ].filter(Boolean).join("\n"))}</pre></details>` : ""}
+  `;
+}
+
+// ---------- bulk ----------
+let countTimer = null;
+els.bulkInput.addEventListener("input", () => {
+  clearTimeout(countTimer);
+  countTimer = setTimeout(updateCount, 200);
+});
+async function updateCount() {
+  const list = await api.extractEmails(els.bulkInput.value);
+  els.count.textContent = `${list.length} address${list.length === 1 ? "" : "es"}`;
+  return list;
+}
+
+els.importBtn.addEventListener("click", async () => {
+  const r = await api.openFile();
+  if (!r) return;
+  const existing = els.bulkInput.value.trim();
+  els.bulkInput.value = (existing ? existing + "\n" : "") + r.emails.join("\n");
+  updateCount();
+});
+
+els.clearBtn.addEventListener("click", () => {
+  els.bulkInput.value = "";
+  updateCount();
+});
+
+els.runBtn.addEventListener("click", async () => {
+  if (running) return;
+  const emails = await updateCount();
+  if (!emails.length) { els.bulkInput.focus(); return; }
+  startRun(emails);
+});
+
+els.stopBtn.addEventListener("click", () => { api.stop(); els.stopBtn.disabled = true; });
+
+async function startRun(emails) {
+  running = true;
+  results = emails.map((email) => ({ email, status: "pending", reason: "", mxHosts: [], elapsedMs: null }));
+  els.runBtn.disabled = true;
+  els.stopBtn.classList.remove("hidden");
+  els.stopBtn.disabled = false;
+  els.progress.classList.remove("hidden");
+  els.bar.style.width = "0%";
+  els.resultsPanel.classList.remove("hidden");
+  renderTable();
+  renderSummary();
+  try {
+    const res = await api.validateMany(emails, options());
+    currentRunId = res.runId;
+    res.results.forEach((r, i) => { if (r) results[i] = r; });
+    results.forEach((r) => { if (r.status === "pending") { r.status = "unknown"; r.reason = "Stopped before this address was checked"; } });
+  } catch (err) {
+    alert("Validation failed: " + err.message);
+  } finally {
+    running = false;
+    els.runBtn.disabled = false;
+    els.stopBtn.classList.add("hidden");
+    els.bar.style.width = "100%";
+    setTimeout(() => els.progress.classList.add("hidden"), 600);
+    renderTable();
+    renderSummary();
+  }
+}
+
+api.onProgress(({ result, index, total, finished }) => {
+  if (!running) return;
+  results[index] = result;
+  els.bar.style.width = `${Math.round((finished / total) * 100)}%`;
+  updateRow(index);
+  renderSummary();
+});
+
+function rowHtml(r, i) {
+  const pending = r.status === "pending";
+  return `
+    <td class="num">${i + 1}</td>
+    <td class="email">${esc(r.email)}</td>
+    <td><span class="badge ${pending ? "checking" : r.status}">${pending ? "…" : r.status}</span></td>
+    <td class="reason">${esc(r.reason)}</td>
+    <td>${pending ? "" : flagsHtml(r)}</td>
+    <td class="mx" title="${esc((r.mxHosts || []).join(", "))}">${esc((r.mxHosts || [])[0] || "")}</td>
+    <td class="num">${r.elapsedMs ?? ""}</td>`;
+}
+
+function visible(r) {
+  const f = els.filter.value;
+  return f === "all" || r.status === f;
+}
+
+function renderTable() {
+  const rows = [];
+  results.forEach((r, i) => {
+    if (!visible(r)) return;
+    rows.push(`<tr data-i="${i}" class="${r.status === "pending" ? "pending" : ""}">${rowHtml(r, i)}</tr>`);
+  });
+  els.tbody.innerHTML = rows.join("");
+}
+
+function updateRow(i) {
+  const tr = els.tbody.querySelector(`tr[data-i="${i}"]`);
+  const r = results[i];
+  if (!tr) { if (visible(r)) renderTable(); return; }
+  if (!visible(r)) { tr.remove(); return; }
+  tr.className = "";
+  tr.innerHTML = rowHtml(r, i);
+}
+
+function renderSummary() {
+  const c = { valid: 0, invalid: 0, risky: 0, unknown: 0, pending: 0 };
+  for (const r of results) c[r.status] = (c[r.status] || 0) + 1;
+  els.summary.innerHTML = `
+    <span class="valid"><b>${c.valid}</b> valid</span>
+    <span class="invalid"><b>${c.invalid}</b> invalid</span>
+    <span class="risky"><b>${c.risky}</b> risky</span>
+    <span class="unknown"><b>${c.unknown}</b> unknown</span>
+    ${c.pending ? `<span><b>${c.pending}</b> pending</span>` : ""}
+    <span>${results.length} total</span>`;
+}
+
+els.filter.addEventListener("change", renderTable);
+
+els.copyValidBtn.addEventListener("click", async () => {
+  const list = results.filter((r) => r.status === "valid").map((r) => r.normalized || r.email);
+  await navigator.clipboard.writeText(list.join("\n"));
+  const old = els.copyValidBtn.textContent;
+  els.copyValidBtn.textContent = `Copied ${list.length}`;
+  setTimeout(() => (els.copyValidBtn.textContent = old), 1500);
+});
+
+els.exportBtn.addEventListener("click", async () => {
+  const done = results.filter((r) => r.status !== "pending");
+  if (!done.length) return;
+  const p = await api.exportCsv(done);
+  if (p) {
+    const old = els.exportBtn.textContent;
+    els.exportBtn.textContent = "Saved";
+    setTimeout(() => (els.exportBtn.textContent = old), 1500);
+  }
+});
+
+// Keyboard: ⌘/Ctrl+Enter in the textarea runs the list.
+els.bulkInput.addEventListener("keydown", (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); els.runBtn.click(); }
+});
+
+checkNetwork();
+updateCount();
