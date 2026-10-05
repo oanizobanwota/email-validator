@@ -52,6 +52,7 @@ async function run() {
   // ---- fake SMTP server ----
   const mailboxes = new Set(["real@fake.test", "full@fake.test"]);
   let catchAllMode = false;
+  let rcptOverride = null;
   let connections = 0;
   const server = net.createServer((sock) => {
     connections++;
@@ -68,7 +69,8 @@ async function run() {
         else if (up.startsWith("MAIL FROM")) sock.write("250 2.1.0 OK\r\n");
         else if (up.startsWith("RCPT TO")) {
           const addr = line.slice(line.indexOf("<") + 1, line.indexOf(">")).toLowerCase();
-          if (addr === "full@fake.test") sock.write("552 5.2.2 Mailbox full\r\n");
+          if (rcptOverride) sock.write(rcptOverride + "\r\n");
+          else if (addr === "full@fake.test") sock.write("552 5.2.2 Mailbox full\r\n");
           else if (catchAllMode || mailboxes.has(addr)) sock.write("250 2.1.5 OK\r\n");
           else sock.write("550 5.1.1 User unknown\r\n");
         } else if (up.startsWith("QUIT")) { sock.write("221 Bye\r\n"); sock.end(); }
@@ -158,6 +160,38 @@ async function run() {
       assert.ok(results.every((r) => r.status === "unknown" && r.smtp === "connect_failed"));
       assert.ok(Date.now() - t0 < 3000, "should not wait per address");
     } finally { dnsModule.resolveMx = origMx; }
+  });
+
+  await t("452 on the first address of a session is a temporary failure, not an endless reconnect", async () => {
+    const before = connections;
+    const dnsModule = require("node:dns").promises;
+    const origMx = dnsModule.resolveMx;
+    dnsModule.resolveMx = async () => [{ exchange: "127.0.0.1", priority: 10 }];
+    rcptOverride = "452 4.5.3 Too many recipients";
+    try {
+      const s = createSession({ ...opts, concurrency: 2 });
+      const t0 = Date.now();
+      const results = await s.validateMany(["a@slow.test", "b@slow.test", "c@slow.test"]);
+      assert.ok(results.every((r) => r.status === "unknown" && r.smtp === "tempfail"), JSON.stringify(results.map((r) => r.smtp)));
+      assert.ok(Date.now() - t0 < 3000);
+      assert.ok(connections - before <= 4, `connections used: ${connections - before}`);
+    } finally { dnsModule.resolveMx = origMx; rcptOverride = null; }
+  });
+
+  await t("DNS: a broken resolver tier is skipped and the working one sticks", async () => {
+    const calls = { broken: 0, good: 0 };
+    const broken = { name: "broken", resolveMx: async () => { calls.broken++; throw Object.assign(new Error("t/o"), { code: "ETIMEOUT" }); }, resolve4: async () => { throw Object.assign(new Error("t/o"), { code: "ETIMEOUT" }); }, resolve6: async () => [] };
+    const good = { name: "good", resolveMx: async (d) => { calls.good++; if (d === "nx.test") throw Object.assign(new Error("nx"), { code: "ENOTFOUND" }); return [{ exchange: "mx." + d, priority: 10 }]; }, resolve4: async () => [], resolve6: async () => [] };
+    const s = createSession({ smtp: false, resolverTiers: [broken, good] });
+    const r1 = await s.validateEmail("a@one.test");
+    const r2 = await s.validateEmail("b@two.test");
+    const r3 = await s.validateEmail("c@nx.test");
+    assert.deepEqual(r1.mxHosts, ["mx.one.test"]);
+    assert.equal(r1.resolver, "good");
+    assert.equal(r2.resolver, "good");
+    assert.equal(r3.status, "invalid");
+    assert.equal(calls.broken, 1, "broken tier should be tried once, then skipped");
+    assert.equal(s.dnsState.tier, 1);
   });
 
   await t("createSession: invalid syntax short-circuits with no network", async () => {

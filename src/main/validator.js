@@ -50,9 +50,9 @@ const TYPO_MAP = {
 const DEFAULTS = {
   smtp: true,              // run the SMTP mailbox probe
   catchAll: true,          // detect catch-all domains (one extra RCPT per domain, cached)
-  connectTimeoutMs: 5000,
+  connectTimeoutMs: 4000,
   commandTimeoutMs: 8000,
-  dnsTimeoutMs: 6000,
+  dnsTimeoutMs: 4000,
   maxHostsPerDomain: 2,    // MX hosts to try before calling a domain unreachable
   sessionsPerDomain: 2,    // parallel SMTP connections to one domain (be polite)
   rcptPerSession: 25,      // addresses checked per connection before reconnecting
@@ -115,31 +115,98 @@ function withTimeout(promise, ms, label) {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(t));
 }
 
-async function resolveMailHosts(domain, opts) {
+const https = require("node:https");
+const { Resolver } = require("node:dns").promises;
+
+const DNS_SOFT_ERRORS = new Set(["ETIMEOUT", "ESERVFAIL", "EREFUSED", "ECONNREFUSED", "ECANCELLED", "ENOTINITIALIZED", "EBADRESP"]);
+
+function dohQuery(name, type, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const req = https.get(`https://dns.google/resolve?name=${encodeURIComponent(name)}&type=${type}`, { timeout: timeoutMs, headers: { accept: "application/dns-json" } }, (res) => {
+      let body = "";
+      res.setEncoding("utf8");
+      res.on("data", (d) => { body += d; });
+      res.on("end", () => {
+        try {
+          const j = JSON.parse(body);
+          if (j.Status === 3) return reject(Object.assign(new Error("NXDOMAIN"), { code: "ENOTFOUND" }));
+          if (j.Status !== 0) return reject(Object.assign(new Error(`DoH status ${j.Status}`), { code: "ESERVFAIL" }));
+          const typeNum = { MX: 15, A: 1, AAAA: 28 }[type];
+          const ans = (j.Answer || []).filter((a) => a.type === typeNum);
+          if (!ans.length) return reject(Object.assign(new Error("no data"), { code: "ENODATA" }));
+          if (type === "MX") resolve(ans.map((a) => { const [pri, ex] = a.data.split(/\s+/); return { priority: parseInt(pri, 10), exchange: (ex || "").replace(/\.$/, "") }; }));
+          else resolve(ans.map((a) => a.data));
+        } catch (e) { reject(Object.assign(e, { code: "EBADRESP" })); }
+      });
+    });
+    req.on("timeout", () => { req.destroy(Object.assign(new Error("DoH timed out"), { code: "ETIMEOUT" })); });
+    req.on("error", (e) => reject(Object.assign(e, { code: e.code && DNS_SOFT_ERRORS.has(e.code) ? e.code : "ETIMEOUT" })));
+  });
+}
+
+/**
+ * Three ways to ask DNS, tried in order and remembered per session:
+ *   system  — the machine's own resolver (c-ares). On Windows with a VPN or a strict
+ *             firewall this can time out on every query even though the browser works.
+ *   public  — 1.1.1.1 / 8.8.8.8 over UDP.
+ *   doh     — DNS-over-HTTPS (dns.google), which works wherever HTTPS works.
+ */
+function makeResolverTiers(opts) {
+  const t = opts.dnsTimeoutMs;
+  const pub = new Resolver({ timeout: t, tries: 1 });
+  pub.setServers(["1.1.1.1", "8.8.8.8"]);
+  const sys = (fn) => (name) => withTimeout(dns[fn](name), t, "DNS");
+  const pubq = (fn) => (name) => withTimeout(pub[fn](name), t, "DNS");
+  return [
+    { name: "system", resolveMx: sys("resolveMx"), resolve4: sys("resolve4"), resolve6: sys("resolve6") },
+    { name: "public", resolveMx: pubq("resolveMx"), resolve4: pubq("resolve4"), resolve6: pubq("resolve6") },
+    { name: "doh", resolveMx: (n) => dohQuery(n, "MX", t), resolve4: (n) => dohQuery(n, "A", t), resolve6: (n) => dohQuery(n, "AAAA", t) },
+  ];
+}
+
+// state = { tiers, tier } shared by a session so a working resolver sticks.
+async function resolveMailHosts(domain, opts, state) {
+  if (!state) state = { tiers: makeResolverTiers(opts), tier: 0 };
+  if (!state.tiers) state.tiers = makeResolverTiers(opts);
+  let lastSoft = null;
+  for (let i = state.tier; i < state.tiers.length; i++) {
+    const r = state.tiers[i];
+    try {
+      const out = await resolveMailHostsWith(r, domain, opts);
+      state.tier = i;              // this resolver works: keep using it
+      out.resolver = r.name;
+      return out;
+    } catch (e) {
+      if (e && e.soft) { lastSoft = e; continue; }   // resolver broken: try the next tier
+      throw e;
+    }
+  }
+  return { ok: false, hosts: [], reason: `DNS lookup failed (${lastSoft?.code || "no resolver answered"})`, transient: true };
+}
+
+async function resolveMailHostsWith(r, domain, opts) {
+  const soft = (e) => Object.assign(e, { soft: true });
   try {
-    const mx = await withTimeout(dns.resolveMx(domain), opts.dnsTimeoutMs, "MX lookup");
+    const mx = await r.resolveMx(domain);
     const hosts = mx
-      .filter((r) => r.exchange && r.exchange !== ".")
+      .filter((x) => x.exchange && x.exchange !== ".")
       .sort((a, b) => a.priority - b.priority)
-      .map((r) => r.exchange.toLowerCase());
+      .map((x) => x.exchange.toLowerCase());
     if (hosts.length) return { ok: true, hosts, source: "mx" };
     // RFC 7505 "null MX" (a single "." record) = domain explicitly refuses mail.
-    if (mx.length && mx.every((r) => r.exchange === "" || r.exchange === ".")) {
-      return { ok: false, hosts: [], reason: "Domain publishes a null MX (does not accept mail)" };
-    }
+    if (mx.length) return { ok: false, hosts: [], reason: "Domain publishes a null MX (does not accept mail)" };
   } catch (e) {
-    if (e.code === "ETIMEOUT") return { ok: false, hosts: [], reason: "DNS lookup timed out", transient: true };
-    if (!["ENODATA", "ENOTFOUND", "ESERVFAIL", "ENOTIMP"].includes(e.code) && !/queryMx/.test(String(e.message))) {
-      return { ok: false, hosts: [], reason: `DNS error (${e.code || e.message})`, transient: true };
-    }
     if (e.code === "ENOTFOUND") return { ok: false, hosts: [], reason: "Domain does not exist" };
+    if (e.code !== "ENODATA") throw soft(e);
   }
   // No MX: RFC 5321 falls back to the A/AAAA record of the domain itself.
   try {
-    const a = await withTimeout(dns.resolve4(domain), opts.dnsTimeoutMs, "A lookup").catch(() => []);
-    const aaaa = a.length ? [] : await withTimeout(dns.resolve6(domain), opts.dnsTimeoutMs, "AAAA lookup").catch(() => []);
+    const a = await r.resolve4(domain).catch((e) => { if (e.code === "ENODATA" || e.code === "ENOTFOUND") return []; throw e; });
+    const aaaa = a.length ? [] : await r.resolve6(domain).catch((e) => { if (e.code === "ENODATA" || e.code === "ENOTFOUND") return []; throw e; });
     if (a.length || aaaa.length) return { ok: true, hosts: [domain], source: "a" };
-  } catch { /* fallthrough */ }
+  } catch (e) {
+    throw soft(e);
+  }
   return { ok: false, hosts: [], reason: "Domain has no mail servers (no MX or A record)" };
 }
 
@@ -282,31 +349,47 @@ class DomainProber {
     return true;
   }
 
+  // Try the top MX hosts at the same time; the first completed handshake wins and the
+  // others are closed. A dead primary MX then costs nothing extra.
   async _open() {
-    let lastErr = null;
-    for (const host of this.hosts) {
-      const client = new SmtpClient(host, this.opts);
-      try {
-        await client.connect();
-        const banner = await client.read();
-        if (banner.code !== 220) { lastErr = { kind: banner.code >= 500 ? "blocked" : "tempfail", detail: `Banner ${banner.code}: ${banner.message}` }; await client.end(); continue; }
-        let ehlo = await client.send(`EHLO ${this.opts.heloHost}`);
-        if (ehlo.code !== 250) ehlo = await client.send(`HELO ${this.opts.heloHost}`);
-        if (ehlo.code !== 250) { lastErr = { kind: ehlo.code >= 500 ? "blocked" : "tempfail", detail: `EHLO ${ehlo.code}: ${ehlo.message}` }; await client.end(); continue; }
-        const from = this.opts.fromAddress || `verify@${this.opts.heloHost}`;
-        const mf = await client.send(`MAIL FROM:<${from}>`);
-        if (mf.code !== 250) { lastErr = { kind: mf.code >= 500 ? "blocked" : "tempfail", detail: `MAIL FROM ${mf.code}: ${mf.message}` }; await client.end(); continue; }
-        this.host = host;
-        return client;
-      } catch (err) {
-        lastErr = { kind: "connect", detail: `${err.code || "ERR"}: ${err.message}`, code: err.code };
-        await client.end();
-      }
-    }
-    if (lastErr?.kind === "blocked") this.blocked = lastErr.detail;
-    else if (lastErr?.kind === "tempfail") this._drain({ outcome: "tempfail", detail: lastErr.detail, host: this.hosts[0] });
-    else { this.unreachable = lastErr?.detail || "no hosts"; this.unreachableCode = lastErr?.code; }
+    const attempts = this.hosts.map((host) => this._openOne(host));
+    const errors = [];
+    let winner = null;
+    await new Promise((done) => {
+      let pending = attempts.length;
+      attempts.forEach((p) => p.then(
+        (res) => { if (winner) { res.client.end(); } else { winner = res; done(); } if (--pending === 0) done(); },
+        (err) => { errors.push(err); if (--pending === 0) done(); },
+      ));
+    });
+    if (winner) { this.host = winner.host; return winner.client; }
+    const blocked = errors.find((e) => e.kind === "blocked");
+    const temp = errors.find((e) => e.kind === "tempfail");
+    if (blocked) this.blocked = blocked.detail;
+    else if (temp) this._drain({ outcome: "tempfail", detail: temp.detail, host: this.hosts[0] });
+    else { const e = errors[0]; this.unreachable = e?.detail || "no hosts"; this.unreachableCode = e?.code; }
     return null;
+  }
+
+  async _openOne(host) {
+    const client = new SmtpClient(host, this.opts);
+    const fail = async (kind, detail, code) => { await client.end(); throw { kind, detail, code }; };
+    try {
+      await client.connect();
+      const banner = await client.read();
+      if (banner.code !== 220) return fail(banner.code >= 500 ? "blocked" : "tempfail", `Banner ${banner.code}: ${banner.message}`);
+      let ehlo = await client.send(`EHLO ${this.opts.heloHost}`);
+      if (ehlo.code !== 250) ehlo = await client.send(`HELO ${this.opts.heloHost}`);
+      if (ehlo.code !== 250) return fail(ehlo.code >= 500 ? "blocked" : "tempfail", `EHLO ${ehlo.code}: ${ehlo.message}`);
+      const from = this.opts.fromAddress || `verify@${this.opts.heloHost}`;
+      const mf = await client.send(`MAIL FROM:<${from}>`);
+      if (mf.code !== 250) return fail(mf.code >= 500 ? "blocked" : "tempfail", `MAIL FROM ${mf.code}: ${mf.message}`);
+      return { client, host };
+    } catch (err) {
+      if (err && err.kind) throw err;
+      await client.end();
+      throw { kind: "connect", detail: `${err.code || "ERR"}: ${err.message}`, code: err.code };
+    }
   }
 
   async _session() {
@@ -329,8 +412,8 @@ class DomainProber {
           if (++this.drops >= 3) { this.unreachable = `${err.code || "ERR"}: ${err.message} (repeatedly dropped)`; this.unreachableCode = err.code; }
           return;
         }
-        if (rcpt.code === 452 || (rcpt.code >= 400 && /too many recipients/i.test(rcpt.message))) {
-          this.queue.unshift(job);   // session limit reached, continue on a new connection
+        if (n > 1 && (rcpt.code === 452 || (rcpt.code >= 400 && /too many recipients/i.test(rcpt.message)))) {
+          this.queue.unshift(job);   // per-session recipient limit reached: continue on a new connection
           return;
         }
         const cls = classifyRcpt(rcpt);
@@ -365,9 +448,10 @@ function createSession(userOpts = {}) {
   const opts = { ...DEFAULTS, ...userOpts };
   const dnsCache = new Map();    // domain -> Promise<resolveMailHosts result>
   const probers = new Map();     // domain -> DomainProber
+  const dnsState = { tiers: opts.resolverTiers || makeResolverTiers(opts), tier: 0 };
 
   function lookupDomain(domain) {
-    if (!dnsCache.has(domain)) dnsCache.set(domain, resolveMailHosts(domain, opts));
+    if (!dnsCache.has(domain)) dnsCache.set(domain, resolveMailHosts(domain, opts, dnsState));
     return dnsCache.get(domain);
   }
 
@@ -415,6 +499,7 @@ function createSession(userOpts = {}) {
     const dnsRes = await lookupDomain(syn.domain);
     result.mx = dnsRes.ok;
     result.mxHosts = dnsRes.hosts;
+    result.resolver = dnsRes.resolver || null;
     if (!dnsRes.ok) {
       result.status = dnsRes.transient ? "unknown" : "invalid";
       result.reason = dnsRes.reason;
@@ -517,7 +602,7 @@ function createSession(userOpts = {}) {
     return results;
   }
 
-  return { validateEmail, validateMany, opts };
+  return { validateEmail, validateMany, opts, dnsState };
 }
 
 /** Quick test of whether outbound port 25 works from this machine. */
@@ -564,6 +649,6 @@ function toCsv(results) {
 }
 
 module.exports = {
-  DEFAULTS, checkSyntax, resolveMailHosts, probeSmtp, classifyRcpt, DomainProber,
+  DEFAULTS, checkSyntax, resolveMailHosts, makeResolverTiers, probeSmtp, classifyRcpt, DomainProber,
   createSession, checkOutboundSmtp, extractEmails, toCsv,
 };

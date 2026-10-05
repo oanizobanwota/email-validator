@@ -10,6 +10,7 @@ const els = {
   optSmtp: $("optSmtp"), optCatchAll: $("optCatchAll"), optConc: $("optConc"),
   runBtn: $("runBtn"), stopBtn: $("stopBtn"), progress: $("progress"), bar: $("bar"),
   resultsPanel: $("resultsPanel"), summary: $("summary"), filter: $("filter"), tbody: $("tbody"),
+  netNote: $("netNote"), progressText: $("progressText"),
   copyValidBtn: $("copyValidBtn"), exportBtn: $("exportBtn"),
 };
 
@@ -20,6 +21,25 @@ const counts = { valid: 0, invalid: 0, risky: 0, unknown: 0, pending: 0 };
 const ROW_CAP = 400;   // rows drawn at once; the rest are reachable through the filter / export
 let shown = 0;         // how many matching rows are currently drawn
 let summaryTimer = null;
+let runStarted = 0;
+let runFinished = 0;
+let runTotal = 0;
+let progressTimer = null;
+
+function renderProgressText() {
+  if (!running) return;
+  const elapsed = (Date.now() - runStarted) / 1000;
+  const rate = runFinished / Math.max(elapsed, 0.001);
+  const left = runTotal - runFinished;
+  const eta = runFinished >= 5 && rate > 0 ? ` · about ${fmtSecs(left / rate)} left` : "";
+  els.progressText.textContent = `${runFinished} of ${runTotal} checked · ${fmtSecs(elapsed)} elapsed${eta}`;
+}
+function fmtSecs(s) {
+  s = Math.round(s);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  return m < 60 ? `${m}m ${s % 60}s` : `${Math.floor(m / 60)}h ${m % 60}m`;
+}
 
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
@@ -48,6 +68,11 @@ async function checkNetwork() {
     els.net.classList.toggle("ok", r.ok);
     els.net.classList.toggle("bad", !r.ok);
     els.netText.textContent = r.ok ? "Outbound SMTP OK — mailboxes can be probed" : "Port 25 blocked — only syntax + DNS checks will be conclusive";
+    if (!r.ok) {
+      els.optSmtp.checked = false;
+      els.netNote.textContent = "This network blocks outbound port 25, so mail servers cannot be asked whether a mailbox exists. Mailbox probing has been switched off: you still get syntax, typo, disposable and mail-server (MX) checks, and the run finishes quickly. Tick \"Probe mailbox\" to force probing anyway (each domain then waits for a timeout).";
+      els.netNote.classList.remove("hidden");
+    }
   } catch {
     els.netText.textContent = "Network check failed";
   }
@@ -87,6 +112,7 @@ function renderSingle(r) {
     </div>
     ${r.mxHosts?.length || r.smtpDetail ? `<details><summary>Details</summary><pre>${esc([
       r.mxHosts?.length ? "MX: " + r.mxHosts.join(", ") : "",
+      r.resolver ? "DNS via: " + r.resolver : "",
       r.smtpHost ? "Probed: " + r.smtpHost : "",
       r.smtpDetail ? "Reply: " + r.smtpDetail : "",
     ].filter(Boolean).join("\n"))}</pre></details>` : ""}
@@ -137,6 +163,10 @@ async function startRun(emails) {
   els.stopBtn.disabled = false;
   els.progress.classList.remove("hidden");
   els.bar.style.width = "0%";
+  runStarted = Date.now(); runFinished = 0; runTotal = emails.length;
+  els.progressText.textContent = "Starting…";
+  els.progressText.classList.remove("hidden");
+  progressTimer = setInterval(renderProgressText, 1000);
   els.resultsPanel.classList.remove("hidden");
   renderTable();
   renderSummary();
@@ -152,6 +182,8 @@ async function startRun(emails) {
     els.runBtn.disabled = false;
     els.stopBtn.classList.add("hidden");
     els.bar.style.width = "100%";
+    clearInterval(progressTimer);
+    els.progressText.textContent = `${results.length} checked in ${fmtSecs((Date.now() - runStarted) / 1000)}`;
     setTimeout(() => els.progress.classList.add("hidden"), 600);
     renderTable();
     renderSummary();
@@ -174,7 +206,9 @@ api.onProgress(({ items, total }) => {
     touched.push(index);
     finished = Math.max(finished, f);
   }
+  runFinished = Math.max(runFinished, finished);
   els.bar.style.width = `${Math.round((finished / total) * 100)}%`;
+  renderProgressText();
   updateRows(touched);
   scheduleSummary();
 });

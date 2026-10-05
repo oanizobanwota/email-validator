@@ -130,3 +130,6 @@ footer b { color: var(--text); font-weight: 600; }
   }
   .badge.valid, .badge.risky, .badge.unknown { color: #fff; }
 }
+
+.note { margin-top: 10px; padding: 9px 12px; border-radius: 8px; background: var(--panel-2); border: 1px solid var(--border); border-left: 3px solid var(--risky); color: var(--muted); font-size: 13px; }
+#progressText { margin-top: 6px; font-variant-numeric: tabular-nums; }

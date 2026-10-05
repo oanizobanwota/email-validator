@@ -74,6 +74,10 @@ Offline: syntax rules, reply classification, CSV, plus a full probe against a fa
 
 Addresses are grouped by domain and checked through one open SMTP connection per domain (up to 25 per connection, 2 connections per domain), and the app remembers what it learns about a domain — unreachable, blocked, or catch-all — so the rest of that domain's addresses are answered instantly. A 300-address mixed list takes ~12 s; 10,000 addresses take minutes rather than hours. The results table draws 400 rows at a time; use the filter or export to CSV for the rest.
 
+## Networks that block DNS or port 25
+
+Mail-server lookups try the system resolver first, then 1.1.1.1 / 8.8.8.8, then DNS-over-HTTPS (dns.google), and stick with the first one that answers — so a VPN or firewall that breaks the system resolver costs one timeout, not one per address. If outbound port 25 is blocked the app says so in its header, switches "Probe mailbox" off and still gives syntax, typo, disposable and MX results in seconds; tick it back on to force probing.
+
 ## Caveats
 
 - Some big providers answer `250` for every address (Yahoo, many Office 365 tenants) — those show as **risky / catch-all**, not valid.
