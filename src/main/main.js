@@ -8,6 +8,16 @@ const { createSession, checkOutboundSmtp, extractEmails, toCsv, DEFAULTS } = req
 let win = null;
 let activeRun = null; // { id, stop: boolean }
 
+// One running copy at a time: a second launch focuses the existing window instead
+// of starting another process (a stray process blocks the Windows installer/uninstaller).
+if (!app.requestSingleInstanceLock()) {
+  app.exit(0);
+} else {
+  app.on("second-instance", () => {
+    if (win) { if (win.isMinimized()) win.restore(); win.focus(); }
+  });
+}
+
 function createWindow() {
   win = new BrowserWindow({
     width: 1100,
@@ -26,14 +36,24 @@ function createWindow() {
   });
   win.loadFile(path.join(__dirname, "..", "renderer", "index.html"));
   win.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: "deny" }; });
+  // If the page ever hangs, closing the window must still end the process.
+  win.on("unresponsive", () => { if (closing) win.destroy(); });
+  win.on("close", () => { closing = true; if (activeRun) activeRun.stop = true; });
   win.on("closed", () => { win = null; });
 }
+let closing = false;
 
 app.whenReady().then(() => {
   createWindow();
   app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
-app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });
+app.on("window-all-closed", () => {
+  if (process.platform === "darwin") return;
+  app.quit();
+  // Belt and braces: if quit is held up by anything, hard-exit shortly after.
+  setTimeout(() => app.exit(0), 2000).unref();
+});
+app.on("before-quit", () => { if (activeRun) activeRun.stop = true; });
 
 // ---------- IPC ----------
 
