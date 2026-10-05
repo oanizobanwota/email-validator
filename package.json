@@ -62,5 +62,10 @@
     "electron": "^33.0.0",
     "electron-builder": "^25.1.8"
   },
-  "author": "GoCom Synergy"
+  "author": "GoCom Synergy",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/oanizobanwota/email-validator.git"
+  },
+  "homepage": "https://scuntore.com"
 }

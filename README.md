@@ -40,6 +40,17 @@ npm run dist:linux    # AppImage + deb
 
 The macOS build is unsigned: on first launch right-click → Open, or run `xattr -dr com.apple.quarantine "/Applications/Email Validator.app"`.
 
+## Releasing
+
+Installers are published as GitHub Release assets and the download page (`docs/`) is GitHub Pages on scuntore.com, linking to `releases/latest/download/<file>` so the links never change between versions.
+
+```bash
+npm version patch            # bumps package.json + creates tag vX.Y.Z
+git push && git push --tags  # the release workflow builds Win/Mac/Linux and attaches them to the release
+```
+
+After the workflow finishes, edit the draft release on GitHub and publish it. Update the version shown in `docs/index.html` when it changes.
+
 ## Command line
 
 The same engine without the window:
