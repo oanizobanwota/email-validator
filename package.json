@@ -17,11 +17,35 @@
   "build": {
     "appId": "com.otawiz.emailvalidator",
     "productName": "Email Validator",
-    "directories": { "output": "dist" },
-    "files": ["src/**/*", "package.json"],
-    "mac": { "category": "public.app-category.utilities", "target": ["dmg", "zip"] },
-    "win": { "target": ["nsis", "portable"] },
-    "linux": { "target": ["AppImage", "deb"] }
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.utilities",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "identity": null,
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ]
+    }
   },
   "devDependencies": {
     "electron": "^33.0.0",
