@@ -53,6 +53,7 @@ const DEFAULTS = {
   connectTimeoutMs: 4000,
   commandTimeoutMs: 8000,
   dnsTimeoutMs: 4000,
+  dnsSlowMs: 1500,         // a resolver slower than this twice in a row is demoted
   maxHostsPerDomain: 2,    // MX hosts to try before calling a domain unreachable
   sessionsPerDomain: 2,    // parallel SMTP connections to one domain (be polite)
   rcptPerSession: 25,      // addresses checked per connection before reconnecting
@@ -172,9 +173,20 @@ async function resolveMailHosts(domain, opts, state) {
   for (let i = state.tier; i < state.tiers.length; i++) {
     const r = state.tiers[i];
     try {
+      const t0 = Date.now();
       const out = await resolveMailHostsWith(r, domain, opts);
+      const took = Date.now() - t0;
       state.tier = i;              // this resolver works: keep using it
+      // ...unless it is crawling (e.g. a dead first DNS server on the adapter makes every
+      // query wait for a retry): demote it after two slow answers so the rest go elsewhere.
+      if (took > opts.dnsSlowMs && i + 1 < state.tiers.length) {
+        state.slow = (state.slow || 0) + 1;
+        if (state.slow >= 2) { state.tier = i + 1; state.slow = 0; }
+      } else {
+        state.slow = 0;
+      }
       out.resolver = r.name;
+      out.dnsMs = took;
       return out;
     } catch (e) {
       if (e && e.soft) { lastSoft = e; continue; }   // resolver broken: try the next tier

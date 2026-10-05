@@ -25,6 +25,7 @@ let runStarted = 0;
 let runFinished = 0;
 let runTotal = 0;
 let progressTimer = null;
+let runDurationText = "";
 
 function renderProgressText() {
   if (!running) return;
@@ -163,7 +164,7 @@ async function startRun(emails) {
   els.stopBtn.disabled = false;
   els.progress.classList.remove("hidden");
   els.bar.style.width = "0%";
-  runStarted = Date.now(); runFinished = 0; runTotal = emails.length;
+  runStarted = Date.now(); runFinished = 0; runTotal = emails.length; runDurationText = "";
   els.progressText.textContent = "Starting…";
   els.progressText.classList.remove("hidden");
   progressTimer = setInterval(renderProgressText, 1000);
@@ -183,7 +184,8 @@ async function startRun(emails) {
     els.stopBtn.classList.add("hidden");
     els.bar.style.width = "100%";
     clearInterval(progressTimer);
-    els.progressText.textContent = `${results.length} checked in ${fmtSecs((Date.now() - runStarted) / 1000)}`;
+    runDurationText = fmtSecs((Date.now() - runStarted) / 1000);
+    els.progressText.textContent = `${results.length} checked in ${runDurationText}`;
     setTimeout(() => els.progress.classList.add("hidden"), 600);
     renderTable();
     renderSummary();
@@ -288,7 +290,8 @@ function renderSummary() {
     <span class="risky"><b>${c.risky}</b> risky</span>
     <span class="unknown"><b>${c.unknown}</b> unknown</span>
     ${c.pending ? `<span><b>${c.pending}</b> pending</span>` : ""}
-    <span>${results.length} total</span>`;
+    <span>${results.length} total</span>
+    ${runDurationText ? `<span title="Total time for this run">⏱ <b>${runDurationText}</b></span>` : running ? `<span>⏱ <b>${fmtSecs((Date.now() - runStarted) / 1000)}</b></span>` : ""}`;
 }
 
 els.filter.addEventListener("change", renderTable);

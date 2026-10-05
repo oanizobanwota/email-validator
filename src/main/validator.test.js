@@ -194,6 +194,15 @@ async function run() {
     assert.equal(s.dnsState.tier, 1);
   });
 
+  await t("DNS: a resolver that answers but crawls is demoted after two slow answers", async () => {
+    const slow = { name: "slow", resolveMx: async (d) => { await new Promise((r) => setTimeout(r, 60)); return [{ exchange: "mx." + d, priority: 10 }]; }, resolve4: async () => [], resolve6: async () => [] };
+    const fast = { name: "fast", resolveMx: async (d) => [{ exchange: "mx." + d, priority: 10 }], resolve4: async () => [], resolve6: async () => [] };
+    const s = createSession({ smtp: false, resolverTiers: [slow, fast], dnsSlowMs: 20 });
+    const r = [];
+    for (const d of ["a.test", "b.test", "c.test", "d.test"]) r.push((await s.validateEmail("x@" + d)).resolver);
+    assert.deepEqual(r, ["slow", "slow", "fast", "fast"]);
+  });
+
   await t("createSession: invalid syntax short-circuits with no network", async () => {
     const s = createSession({ smtp: false });
     const r = await s.validateEmail("not an email");
