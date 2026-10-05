@@ -11,8 +11,9 @@
     "check": "node src/main/cli.js",
     "test": "node src/main/validator.test.js",
     "dist": "electron-builder --mac --publish never",
-    "dist:win": "electron-builder --win --publish never",
-    "dist:linux": "electron-builder --linux --publish never"
+    "dist:win": "electron-builder --win --x64 --publish never",
+    "dist:linux": "electron-builder --linux --publish never",
+    "dist:all": "electron-builder --mac --win --x64 --arm64 --publish never"
   },
   "build": {
     "appId": "com.otawiz.emailvalidator",
@@ -45,10 +46,21 @@
         "AppImage",
         "deb"
       ]
+    },
+    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "artifactName": "${productName}-Setup-${version}-${arch}.${ext}"
+    },
+    "portable": {
+      "artifactName": "${productName}-Portable-${version}-${arch}.${ext}"
     }
   },
   "devDependencies": {
     "electron": "^33.0.0",
     "electron-builder": "^25.1.8"
-  }
+  },
+  "author": "GoCom Synergy"
 }
