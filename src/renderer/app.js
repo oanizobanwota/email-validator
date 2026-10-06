@@ -13,7 +13,7 @@ const els = {
   netNote: $("netNote"), progressText: $("progressText"),
   licenseGate: $("licenseGate"), licenseForm: $("licenseForm"), licenseInput: $("licenseInput"), licenseError: $("licenseError"), licenseBtn: $("licenseBtn"), licenseHint: $("licenseHint"),
   userBox: $("userBox"), userName: $("userName"), logoutBtn: $("logoutBtn"),
-  copyValidBtn: $("copyValidBtn"), exportBtn: $("exportBtn"), clearResultsBtn: $("clearResultsBtn"),
+  copyValidBtn: $("copyValidBtn"), copyUnknownBtn: $("copyUnknownBtn"), exportBtn: $("exportBtn"), clearResultsBtn: $("clearResultsBtn"),
 };
 
 let results = [];      // current bulk results (input order)
@@ -160,12 +160,18 @@ function clearResults() {
   els.resultsPanel.classList.add("hidden");
   els.progressText.classList.add("hidden");
   els.progress.classList.add("hidden");
-  els.copyValidBtn.textContent = copyLabel();
+  refreshCopyLabels();
 }
 els.clearResultsBtn.addEventListener("click", () => { if (!running) clearResults(); });
 
-function copyLabel() { return `Copy valid (${counts.valid})`; }
-let copyTimer = null;
+// One copy button per status: label carries the live count, flashes "Copied N", then restores.
+const COPY_BUTTONS = [
+  { el: () => els.copyValidBtn, status: "valid", label: "Copy valid", timer: null },
+  { el: () => els.copyUnknownBtn, status: "unknown", label: "Copy unknown", timer: null },
+];
+function refreshCopyLabels() {
+  for (const b of COPY_BUTTONS) if (!b.timer) b.el().textContent = `${b.label} (${counts[b.status] || 0})`;
+}
 
 els.runBtn.addEventListener("click", async () => {
   if (running) return;
@@ -307,7 +313,7 @@ function scheduleSummary() {
 
 function renderSummary() {
   const c = counts;
-  if (!copyTimer || els.copyValidBtn.textContent.startsWith("Copy valid")) els.copyValidBtn.textContent = copyLabel();
+  refreshCopyLabels();
   els.clearResultsBtn.disabled = running;
   els.summary.innerHTML = `
     <span class="valid"><b>${c.valid}</b> valid</span>
@@ -336,13 +342,15 @@ async function copyText(text) {
   return ok;
 }
 
-els.copyValidBtn.addEventListener("click", async () => {
-  const list = results.filter((r) => r.status === "valid").map((r) => r.normalized || r.email);
-  const ok = await copyText(list.join("\n"));
-  clearTimeout(copyTimer);
-  els.copyValidBtn.textContent = ok ? `Copied ${list.length}` : "Copy failed — use Export CSV";
-  copyTimer = setTimeout(() => { els.copyValidBtn.textContent = copyLabel(); }, ok ? 1500 : 3000);
-});
+for (const b of COPY_BUTTONS) {
+  b.el().addEventListener("click", async () => {
+    const list = results.filter((r) => r.status === b.status).map((r) => r.normalized || r.email);
+    const ok = await copyText(list.join("\n"));
+    clearTimeout(b.timer);
+    b.el().textContent = ok ? `Copied ${list.length}` : "Copy failed — use Export CSV";
+    b.timer = setTimeout(() => { b.timer = null; refreshCopyLabels(); }, ok ? 1500 : 3000);
+  });
+}
 
 els.exportBtn.addEventListener("click", async () => {
   const done = results.filter((r) => r.status !== "pending");
