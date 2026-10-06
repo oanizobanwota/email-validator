@@ -40,6 +40,18 @@ npm run dist:linux    # AppImage + deb
 
 The macOS build is unsigned: on first launch right-click → Open, or run `xattr -dr com.apple.quarantine "/Applications/Email Validator.app"`.
 
+## Desktop license keys
+
+The desktop app is locked until a valid license key is entered (first launch shows the key screen; the header then reads "Licensed to …", with a *Change key* button). Keys are Ed25519-signed and verified offline against the public key in `src/main/licensePublicKey.js`; the private key is `license-private.key` in the repo root — **gitignored, back it up, never share it**. If it is ever lost, run `keygen` again and re-issue every customer's key.
+
+```bash
+npm run license -- issue --name "Ada Lovelace" --email ada@example.com            # perpetual
+npm run license -- issue --name "Ada Lovelace" --email ada@example.com --days 365 # expires
+npm run license -- verify EV1....
+```
+
+The web version does not use license keys; it uses accounts.
+
 ## Releasing
 
 Installers are published as GitHub Release assets and the download page (`docs/`) is GitHub Pages on scuntore.com, linking to `releases/latest/download/<file>` so the links never change between versions.
@@ -59,7 +71,11 @@ Same engine and same page, served over HTTP from `src/web/server.js`. The checks
 WEB_PASSWORD=choose-a-long-secret PORT=8080 npm run web
 ```
 
-Then open `http://<server>:8080`, enter the access key once (kept in a cookie for 7 days). Environment: `WEB_PASSWORD` (strongly recommended — without it anyone who finds the port can use it), `PORT` (8080), `HOST` (0.0.0.0), `MAX_EMAILS` per run (20000), `MAX_CONCURRENCY` (30).
+**Accounts.** Users sign in with a username and password; sessions are a signed HttpOnly cookie (7 days) and 10 failed logins per IP are blocked for 15 minutes. Manage accounts with `node src/web/users.js add <name> <password>` / `remove <name>` / `list` (stored as scrypt hashes in `users.json` next to the app, or set `USERS_FILE`), then restart the service. With no accounts configured at all the server is OPEN, for local use only. Environment: `PORT` (8080), `HOST` (0.0.0.0), `MAX_EMAILS` per run (20000), `MAX_CONCURRENCY` (30), `SESSION_SECRET` (auto-generated into `.session-secret` if unset).
+
+```bash
+WEB_PASSWORD=choose-a-long-secret PORT=8080 npm run web   # legacy: single key, username "admin"
+```
 
 - **HTTPS + domain:** put [Caddy](https://caddyserver.com) in front: `caddy reverse-proxy --from validator.scuntore.com --to localhost:8080` (automatic certificate), with the DNS A record pointing at the server.
 - **Keep it running:** Linux — a systemd unit with `ExecStart=/usr/bin/node /opt/email-validator/src/web/server.js` and the env vars in `Environment=`; Windows — install it as a service with [NSSM](https://nssm.cc) (`nssm install EmailValidator "C:\Program Files\nodejs\node.exe" "C:\email-validator\src\web\server.js"`, then set the env vars on the service).

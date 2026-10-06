@@ -11,6 +11,11 @@ contextBridge.exposeInMainWorld("validator", {
   openFile: () => ipcRenderer.invoke("open-file"),
   exportCsv: (results) => ipcRenderer.invoke("export-csv", results),
   extractEmails: (text) => ipcRenderer.invoke("extract-emails", text),
+  license: {
+    status: () => ipcRenderer.invoke("license-status"),
+    activate: (key) => ipcRenderer.invoke("license-activate", key),
+    remove: () => ipcRenderer.invoke("license-remove"),
+  },
   onProgress: (cb) => {
     const handler = (_evt, payload) => cb(payload);
     ipcRenderer.on("progress", handler);

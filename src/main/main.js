@@ -4,6 +4,7 @@ const { app, BrowserWindow, ipcMain, dialog, shell } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs/promises");
 const { createSession, checkOutboundSmtp, extractEmails, toCsv, DEFAULTS } = require("./validator");
+const license = require("./license");
 
 // No GPU acceleration: over Remote Desktop or in a VM there is no GPU, and Chromium's
 // software fallback repaints burn the CPU and stall the whole RDP session.
@@ -66,16 +67,28 @@ app.on("before-quit", () => { if (activeRun) activeRun.stop = true; });
 
 // ---------- IPC ----------
 
+// ----- license gate (desktop only) -----
+const userData = () => app.getPath("userData");
+function requireLicense() {
+  const st = license.loadLicense(userData());
+  if (!st.valid) throw new Error("LICENSE_REQUIRED");
+}
+ipcMain.handle("license-status", () => { const st = license.loadLicense(userData()); return { valid: st.valid, reason: st.reason, license: st.license }; });
+ipcMain.handle("license-activate", (_evt, key) => { const r = license.saveLicense(userData(), key); return { valid: r.valid, reason: r.reason, license: r.license }; });
+ipcMain.handle("license-remove", () => { license.removeLicense(userData()); return true; });
+
 ipcMain.handle("defaults", () => ({ ...DEFAULTS }));
 
 ipcMain.handle("check-network", async () => checkOutboundSmtp());
 
 ipcMain.handle("validate-one", async (_evt, email, options) => {
+  requireLicense();
   const session = createSession(options || {});
   return session.validateEmail(email);
 });
 
 ipcMain.handle("validate-many", async (evt, emails, options) => {
+  requireLicense();
   if (activeRun) activeRun.stop = true;
   const run = { id: Date.now(), stop: false };
   activeRun = run;

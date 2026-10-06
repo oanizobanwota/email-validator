@@ -59,7 +59,7 @@ main { flex: 1; overflow: auto; padding: 16px; display: flex; flex-direction: co
 .options label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
 .options input[type="number"] { width: 56px; }
 
-input[type="text"], input[type="number"], textarea, select {
+input[type="text"], input[type="password"], input[type="number"], textarea, select {
   background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 8px;
   padding: 9px 11px; font-size: 14px; outline: none;
 }
@@ -136,3 +136,20 @@ footer b { color: var(--text); font-weight: 600; }
 
 /* Web version: no macOS traffic-light inset, no draggable region. */
 body.web .titlebar { padding-left: 16px; -webkit-app-region: no-drag; }
+
+/* header right side */
+.hdr-right { display: flex; align-items: center; gap: 14px; }
+.userbox { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12.5px; }
+.userbox #userName { color: var(--text); }
+button.small { padding: 4px 9px; font-size: 12px; -webkit-app-region: no-drag; }
+
+/* full-window gates (license key / sign in) */
+.gate { position: fixed; inset: 0; z-index: 50; background: var(--bg); display: grid; place-items: center; padding: 20px; }
+.gate-card { width: min(460px, 100%); background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 22px 22px 18px; display: flex; flex-direction: column; gap: 12px; }
+.gate-card h3 { margin: 6px 0 0; font-size: 18px; }
+.gate-card p { margin: 0; font-size: 13.5px; }
+.gate-card textarea { margin: 0; min-height: 72px; font-size: 12.5px; word-break: break-all; }
+.gate-card .field { display: flex; flex-direction: column; gap: 5px; font-size: 13px; color: var(--muted); }
+.gate-card .field input { width: 100%; font-family: inherit; }
+.gate-error { color: var(--invalid); font-size: 13px; }
+body.locked main, body.locked footer { filter: blur(2px); pointer-events: none; user-select: none; }

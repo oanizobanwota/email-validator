@@ -11,6 +11,8 @@ const els = {
   runBtn: $("runBtn"), stopBtn: $("stopBtn"), progress: $("progress"), bar: $("bar"),
   resultsPanel: $("resultsPanel"), summary: $("summary"), filter: $("filter"), tbody: $("tbody"),
   netNote: $("netNote"), progressText: $("progressText"),
+  licenseGate: $("licenseGate"), licenseForm: $("licenseForm"), licenseInput: $("licenseInput"), licenseError: $("licenseError"), licenseBtn: $("licenseBtn"), licenseHint: $("licenseHint"),
+  userBox: $("userBox"), userName: $("userName"), logoutBtn: $("logoutBtn"),
   copyValidBtn: $("copyValidBtn"), exportBtn: $("exportBtn"), clearResultsBtn: $("clearResultsBtn"),
 };
 
@@ -357,6 +359,45 @@ els.exportBtn.addEventListener("click", async () => {
 els.bulkInput.addEventListener("keydown", (e) => {
   if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); els.runBtn.click(); }
 });
+
+// ---------- desktop license gate ----------
+function showLicenseGate(msg) {
+  els.licenseGate.classList.remove("hidden");
+  document.body.classList.add("locked");
+  if (msg) { els.licenseError.textContent = msg; els.licenseError.classList.remove("hidden"); } else els.licenseError.classList.add("hidden");
+  setTimeout(() => els.licenseInput.focus(), 50);
+}
+function hideLicenseGate(lic) {
+  els.licenseGate.classList.add("hidden");
+  document.body.classList.remove("locked");
+  if (lic) {
+    els.userName.textContent = `Licensed to ${lic.name}${lic.expires ? ` · until ${lic.expires}` : ""}`;
+    els.logoutBtn.textContent = "Change key";
+    els.userBox.classList.remove("hidden");
+  }
+}
+async function initLicense() {
+  if (!api.license) return;                       // web version: the server handles sign-in instead
+  const st = await api.license.status();
+  if (st.valid) hideLicenseGate(st.license);
+  else showLicenseGate(st.reason === "No license key entered yet" ? "" : st.reason);
+  els.licenseForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    els.licenseBtn.disabled = true;
+    try {
+      const r = await api.license.activate(els.licenseInput.value);
+      if (r.valid) { els.licenseInput.value = ""; hideLicenseGate(r.license); }
+      else showLicenseGate(r.reason || "Invalid license key");
+    } finally { els.licenseBtn.disabled = false; }
+  });
+  els.logoutBtn.addEventListener("click", async () => {
+    if (!confirm("Remove the stored license key from this computer? You will need to enter a key again.")) return;
+    await api.license.remove();
+    els.userBox.classList.add("hidden");
+    showLicenseGate("");
+  });
+}
+initLicense();
 
 // Give the window a moment to settle before the network check (first launch after an
 // install is already busy with Defender scanning the fresh files).

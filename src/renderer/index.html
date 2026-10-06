@@ -12,10 +12,37 @@
       <span class="logo">@</span>
       <span>Email Validator</span>
     </div>
-    <div class="net" id="net" title="Whether this network allows outbound SMTP (port 25). Without it, mailbox existence cannot be probed.">
-      <span class="dot"></span><span id="netText">Checking network…</span>
+    <div class="hdr-right">
+      <div class="net" id="net" title="Whether this network allows outbound SMTP (port 25). Without it, mailbox existence cannot be probed.">
+        <span class="dot"></span><span id="netText">Checking network…</span>
+      </div>
+      <div class="userbox hidden" id="userBox"><span id="userName"></span><button type="button" id="logoutBtn" class="small">Log out</button></div>
     </div>
   </header>
+
+  <!-- Desktop: license key gate (shown by app.js until a valid key is stored) -->
+  <div class="gate hidden" id="licenseGate">
+    <form class="gate-card" id="licenseForm">
+      <div class="brand"><span class="logo">@</span><span>Email Validator</span></div>
+      <h3>Enter your license key</h3>
+      <p class="muted">This copy is locked until a valid license key is entered. Paste the key you received, then press Unlock.</p>
+      <textarea id="licenseInput" rows="3" placeholder="EV1.…" spellcheck="false"></textarea>
+      <div class="gate-error hidden" id="licenseError"></div>
+      <div class="row between"><span class="muted" id="licenseHint"></span><button type="submit" class="primary" id="licenseBtn">Unlock</button></div>
+    </form>
+  </div>
+
+  <!-- Web: username + password gate (shown by web-bridge.js when not signed in) -->
+  <div class="gate hidden" id="loginGate">
+    <form class="gate-card" id="loginForm">
+      <div class="brand"><span class="logo">@</span><span>Email Validator</span></div>
+      <h3>Sign in</h3>
+      <label class="field">Username<input type="text" id="loginUser" autocomplete="username" autocapitalize="off" spellcheck="false" /></label>
+      <label class="field">Password<input type="password" id="loginPass" autocomplete="current-password" /></label>
+      <div class="gate-error hidden" id="loginError"></div>
+      <div class="row between"><span></span><button type="submit" class="primary" id="loginBtn">Sign in</button></div>
+    </form>
+  </div>
 
   <main>
     <section class="panel single">

@@ -15,7 +15,8 @@
  *   POST /api/validate-many       { emails[], options }        -> { runId }
  *   GET  /api/runs/:id/events     Server-Sent Events: "progress" {items,total} … "done" {results,stopped}
  *   POST /api/runs/:id/stop
- * Access: when WEB_PASSWORD is set, send it as X-Access-Key once; a cookie keeps you in.
+ * Access: username + password accounts (node src/web/users.js add <name> <password>);
+ *         POST /api/login sets a signed HttpOnly session cookie (7 days), POST /api/logout clears it.
  */
 
 const http = require("node:http");
@@ -23,10 +24,10 @@ const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const { createSession, checkOutboundSmtp, extractEmails, DEFAULTS } = require("../main/validator");
+const users = require("./users");
 
 const PORT = parseInt(process.env.PORT || "8080", 10);
 const HOST = process.env.HOST || "0.0.0.0";
-const PASSWORD = process.env.WEB_PASSWORD || "";
 const MAX_EMAILS = parseInt(process.env.MAX_EMAILS || "20000", 10);
 const MAX_CONCURRENCY = parseInt(process.env.MAX_CONCURRENCY || "30", 10);
 const RUN_TTL_MS = 30 * 60 * 1000;
@@ -41,24 +42,51 @@ const STATIC = {
 const runs = new Map(); // runId -> { id, total, results, events: [], done, stopped, subscribers:Set<res>, createdAt, stopFlag }
 let networkCache = null;
 
-const COOKIE = "ev_key";
-function cookieValue(req) {
-  const m = (req.headers.cookie || "").match(new RegExp(`(?:^|;\\s*)${COOKIE}=([^;]*)`));
-  return m ? decodeURIComponent(m[1]) : "";
+// ----- sessions: signed, HttpOnly cookie; accounts via users.js -----
+const SESSION_COOKIE = "ev_session";
+const SESSION_TTL_S = 7 * 24 * 3600;
+const SECRET_FILE = process.env.SESSION_SECRET_FILE || path.join(__dirname, "..", "..", ".session-secret");
+function sessionSecret() {
+  if (process.env.SESSION_SECRET) return process.env.SESSION_SECRET;
+  try { return fs.readFileSync(SECRET_FILE, "utf8").trim(); } catch { /* create */ }
+  const s = crypto.randomBytes(32).toString("hex");
+  try { fs.writeFileSync(SECRET_FILE, s, { mode: 0o600 }); } catch { /* read-only fs: in-memory secret */ }
+  return s;
 }
-function safeEqual(a, b) {
-  const A = Buffer.from(String(a)), B = Buffer.from(String(b));
-  return A.length === B.length && crypto.timingSafeEqual(A, B);
+const SECRET = sessionSecret();
+const b64u = (x) => Buffer.from(x).toString("base64url");
+function makeSession(user) {
+  const exp = Math.floor(Date.now() / 1000) + SESSION_TTL_S;
+  const body = `${b64u(user)}.${exp}`;
+  const mac = crypto.createHmac("sha256", SECRET).update(body).digest("base64url");
+  return `${body}.${mac}`;
 }
-function authorised(req, res) {
-  if (!PASSWORD) return true;
-  const header = req.headers["x-access-key"];
-  if (header && safeEqual(header, PASSWORD)) {
-    res.setHeader("Set-Cookie", `${COOKIE}=${encodeURIComponent(PASSWORD)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${7 * 24 * 3600}`);
-    return true;
-  }
-  return safeEqual(cookieValue(req), PASSWORD);
+function readSession(req) {
+  const m = (req.headers.cookie || "").match(new RegExp(`(?:^|;\\s*)${SESSION_COOKIE}=([^;]*)`));
+  if (!m) return null;
+  const [u, exp, mac] = decodeURIComponent(m[1]).split(".");
+  if (!u || !exp || !mac) return null;
+  const want = crypto.createHmac("sha256", SECRET).update(`${u}.${exp}`).digest("base64url");
+  const A = Buffer.from(mac), B = Buffer.from(want);
+  if (A.length !== B.length || !crypto.timingSafeEqual(A, B)) return null;
+  if (parseInt(exp, 10) * 1000 < Date.now()) return null;
+  return { user: Buffer.from(u, "base64url").toString("utf8") };
 }
+function setSessionCookie(res, value, maxAge) {
+  res.setHeader("Set-Cookie", `${SESSION_COOKIE}=${encodeURIComponent(value)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${maxAge}`);
+}
+// Brute-force brake: 10 failed logins per IP per 15 minutes.
+const failures = new Map();
+function tooManyFailures(ip) {
+  const f = failures.get(ip);
+  return f && f.count >= 10 && Date.now() - f.first < 15 * 60 * 1000;
+}
+function noteFailure(ip) {
+  const f = failures.get(ip);
+  if (!f || Date.now() - f.first > 15 * 60 * 1000) failures.set(ip, { count: 1, first: Date.now() });
+  else f.count++;
+}
+const OPEN_ACCESS = !users.hasAnyUser();   // no accounts configured at all → open (local use only)
 
 function json(res, status, body) {
   const data = JSON.stringify(body);
@@ -136,7 +164,22 @@ const server = http.createServer(async (req, res) => {
     }
     if (!url.pathname.startsWith("/api/")) { res.writeHead(404); return res.end("Not found"); }
 
-    if (!authorised(req, res)) return json(res, 401, { error: "ACCESS_KEY_REQUIRED" });
+    const ip = req.socket.remoteAddress || "?";
+    if (req.method === "POST" && url.pathname === "/api/login") {
+      if (tooManyFailures(ip)) return json(res, 429, { error: "TOO_MANY_ATTEMPTS" });
+      const body = await readJson(req, 16 * 1024);
+      if (users.authenticate(body.username, body.password)) {
+        const user = String(body.username).trim().toLowerCase();
+        setSessionCookie(res, makeSession(user), SESSION_TTL_S);
+        return json(res, 200, { ok: true, user });
+      }
+      noteFailure(ip);
+      return json(res, 401, { error: "BAD_CREDENTIALS" });
+    }
+    if (req.method === "POST" && url.pathname === "/api/logout") { setSessionCookie(res, "", 0); return json(res, 200, { ok: true }); }
+    const session = OPEN_ACCESS ? { user: "local" } : readSession(req);
+    if (req.method === "GET" && url.pathname === "/api/me") return json(res, session ? 200 : 401, session ? { user: session.user } : { error: "SIGN_IN_REQUIRED" });
+    if (!session) return json(res, 401, { error: "SIGN_IN_REQUIRED" });
 
     if (req.method === "GET" && url.pathname === "/api/defaults") return json(res, 200, { ...DEFAULTS, maxEmails: MAX_EMAILS, maxConcurrency: MAX_CONCURRENCY });
     if (req.method === "GET" && url.pathname === "/api/network") {
@@ -181,5 +224,6 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, HOST, () => {
   console.log(`Email Validator web version listening on http://${HOST}:${PORT}`);
-  if (!PASSWORD) console.log("WARNING: WEB_PASSWORD is not set — anyone who can reach this port can use it.");
+  if (OPEN_ACCESS) console.log("WARNING: no user accounts configured (users.json / WEB_USERS / WEB_PASSWORD) — anyone who can reach this port can use it. Add one with: node src/web/users.js add <name> <password>");
+  else console.log(`Accounts file: ${users.USERS_FILE}`);
 });

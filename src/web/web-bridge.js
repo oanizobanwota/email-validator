@@ -5,23 +5,56 @@
 (() => {
   document.body.classList.add("web");
 
-  let key = "";
-  try { key = sessionStorage.getItem("ev_key") || ""; } catch { /* private mode */ }
   let currentRun = null;
   const listeners = [];
+  const $ = (id) => document.getElementById(id);
+
+  // ----- sign-in gate -----
+  let loginWaiters = [];
+  function showLogin(msg) {
+    $("loginGate").classList.remove("hidden");
+    document.body.classList.add("locked");
+    const err = $("loginError");
+    if (msg) { err.textContent = msg; err.classList.remove("hidden"); } else err.classList.add("hidden");
+    setTimeout(() => ($("loginUser").value ? $("loginPass") : $("loginUser")).focus(), 50);
+    return new Promise((resolve) => loginWaiters.push(resolve));
+  }
+  function hideLogin(user) {
+    $("loginGate").classList.add("hidden");
+    document.body.classList.remove("locked");
+    $("userName").textContent = user;
+    $("userBox").classList.remove("hidden");
+    loginWaiters.splice(0).forEach((r) => r());
+  }
+  $("loginForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const btn = $("loginBtn"); btn.disabled = true;
+    try {
+      const res = await fetch("/api/login", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "same-origin",
+        body: JSON.stringify({ username: $("loginUser").value, password: $("loginPass").value }) });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) { $("loginPass").value = ""; hideLogin(data.user); }
+      else if (res.status === 429) showLogin("Too many failed attempts — wait 15 minutes and try again.");
+      else showLogin("Wrong username or password.");
+    } catch { showLogin("Could not reach the server."); }
+    finally { btn.disabled = false; }
+  });
+  $("logoutBtn").addEventListener("click", async () => {
+    await fetch("/api/logout", { method: "POST", credentials: "same-origin" }).catch(() => {});
+    $("userBox").classList.add("hidden");
+    $("userName").textContent = "";
+    showLogin("");
+  });
+  // Who am I? Open access (no accounts configured) → no gate at all.
+  fetch("/api/me", { credentials: "same-origin" }).then(async (r) => {
+    if (r.ok) { const d = await r.json(); if (d.user !== "local") hideLogin(d.user); }
+    else showLogin("");
+  }).catch(() => {});
 
   async function api(method, path, body) {
     for (;;) {
-      const headers = { "Content-Type": "application/json" };
-      if (key) headers["X-Access-Key"] = key;
-      const res = await fetch(path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), credentials: "same-origin" });
-      if (res.status === 401) {
-        const entered = window.prompt("This validator is private. Enter the access key:");
-        if (entered == null) throw new Error("Access key required");
-        key = entered.trim();
-        try { sessionStorage.setItem("ev_key", key); } catch { /* ignore */ }
-        continue;
-      }
+      const res = await fetch(path, { method, headers: { "Content-Type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body), credentials: "same-origin" });
+      if (res.status === 401) { await showLogin(""); continue; }
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error === "TOO_MANY" ? `Too many addresses — the server accepts up to ${data.max} per run` : data.error || `HTTP ${res.status}`);
       return data;
