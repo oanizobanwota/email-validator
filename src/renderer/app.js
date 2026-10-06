@@ -358,5 +358,7 @@ els.bulkInput.addEventListener("keydown", (e) => {
   if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); els.runBtn.click(); }
 });
 
-checkNetwork();
+// Give the window a moment to settle before the network check (first launch after an
+// install is already busy with Defender scanning the fresh files).
+setTimeout(checkNetwork, 1500);
 updateCount();

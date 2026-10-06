@@ -8,6 +8,9 @@ const { createSession, checkOutboundSmtp, extractEmails, toCsv, DEFAULTS } = req
 // No GPU acceleration: over Remote Desktop or in a VM there is no GPU, and Chromium's
 // software fallback repaints burn the CPU and stall the whole RDP session.
 app.disableHardwareAcceleration();
+// Windows occlusion tracking misjudges Remote Desktop / VM windows and throttles or blanks
+// them; it is a known Chromium-on-RDP problem.
+app.commandLine.appendSwitch("disable-features", "CalculateNativeWinOcclusion");
 
 let win = null;
 let activeRun = null; // { id, stop: boolean }
@@ -30,6 +33,7 @@ function createWindow() {
     minHeight: 560,
     title: "Email Validator",
     backgroundColor: "#0f1115",
+    show: false, // shown once the page has rendered, so startup never flashes a blank window
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
@@ -38,6 +42,7 @@ function createWindow() {
       sandbox: true,
     },
   });
+  win.once("ready-to-show", () => win.show());
   win.loadFile(path.join(__dirname, "..", "renderer", "index.html"));
   win.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: "deny" }; });
   // If the page ever hangs, closing the window must still end the process.

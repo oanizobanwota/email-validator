@@ -1,7 +1,7 @@
 {
   "name": "email-validator-desktop",
   "productName": "Email Validator",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "description": "Desktop app that checks whether email addresses are well-formed and actually exist (MX + SMTP mailbox probe).",
   "main": "src/main/main.js",
   "type": "commonjs",
@@ -53,7 +53,8 @@
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
-      "artifactName": "Email-Validator-Setup-${version}-${arch}.${ext}"
+      "artifactName": "Email-Validator-Setup-${version}-${arch}.${ext}",
+      "runAfterFinish": false
     },
     "portable": {
       "artifactName": "Email-Validator-Portable-${version}-${arch}.${ext}"
