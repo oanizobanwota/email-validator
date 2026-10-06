@@ -11,7 +11,7 @@ const els = {
   runBtn: $("runBtn"), stopBtn: $("stopBtn"), progress: $("progress"), bar: $("bar"),
   resultsPanel: $("resultsPanel"), summary: $("summary"), filter: $("filter"), tbody: $("tbody"),
   netNote: $("netNote"), progressText: $("progressText"),
-  copyValidBtn: $("copyValidBtn"), exportBtn: $("exportBtn"),
+  copyValidBtn: $("copyValidBtn"), exportBtn: $("exportBtn"), clearResultsBtn: $("clearResultsBtn"),
 };
 
 let results = [];      // current bulk results (input order)
@@ -143,7 +143,27 @@ els.importBtn.addEventListener("click", async () => {
 els.clearBtn.addEventListener("click", () => {
   els.bulkInput.value = "";
   updateCount();
+  if (!running) clearResults();
 });
+
+function clearResults() {
+  results = [];
+  counts.valid = counts.invalid = counts.risky = counts.unknown = counts.pending = 0;
+  runDurationText = "";
+  shown = 0;
+  els.tbody.innerHTML = "";
+  els.summary.innerHTML = "";
+  const note = document.getElementById("capNote");
+  if (note) note.textContent = "";
+  els.resultsPanel.classList.add("hidden");
+  els.progressText.classList.add("hidden");
+  els.progress.classList.add("hidden");
+  els.copyValidBtn.textContent = copyLabel();
+}
+els.clearResultsBtn.addEventListener("click", () => { if (!running) clearResults(); });
+
+function copyLabel() { return `Copy valid (${counts.valid})`; }
+let copyTimer = null;
 
 els.runBtn.addEventListener("click", async () => {
   if (running) return;
@@ -186,6 +206,7 @@ async function startRun(emails) {
     clearInterval(progressTimer);
     runDurationText = fmtSecs((Date.now() - runStarted) / 1000);
     els.progressText.textContent = `${results.length} checked in ${runDurationText}`;
+    els.clearResultsBtn.disabled = false;
     setTimeout(() => els.progress.classList.add("hidden"), 600);
     renderTable();
     renderSummary();
@@ -284,6 +305,8 @@ function scheduleSummary() {
 
 function renderSummary() {
   const c = counts;
+  if (!copyTimer || els.copyValidBtn.textContent.startsWith("Copy valid")) els.copyValidBtn.textContent = copyLabel();
+  els.clearResultsBtn.disabled = running;
   els.summary.innerHTML = `
     <span class="valid"><b>${c.valid}</b> valid</span>
     <span class="invalid"><b>${c.invalid}</b> invalid</span>
@@ -296,12 +319,27 @@ function renderSummary() {
 
 els.filter.addEventListener("change", renderTable);
 
+// Clipboard: the async API only exists on https/localhost; fall back to the classic
+// selection + execCommand path (works over plain http, e.g. the web version on a VPS).
+async function copyText(text) {
+  try {
+    if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(text); return true; }
+  } catch { /* fall through */ }
+  const ta = document.createElement("textarea");
+  ta.value = text; ta.setAttribute("readonly", ""); ta.style.position = "fixed"; ta.style.opacity = "0";
+  document.body.appendChild(ta); ta.select();
+  let ok = false;
+  try { ok = document.execCommand("copy"); } catch { ok = false; }
+  document.body.removeChild(ta);
+  return ok;
+}
+
 els.copyValidBtn.addEventListener("click", async () => {
   const list = results.filter((r) => r.status === "valid").map((r) => r.normalized || r.email);
-  await navigator.clipboard.writeText(list.join("\n"));
-  const old = els.copyValidBtn.textContent;
-  els.copyValidBtn.textContent = `Copied ${list.length}`;
-  setTimeout(() => (els.copyValidBtn.textContent = old), 1500);
+  const ok = await copyText(list.join("\n"));
+  clearTimeout(copyTimer);
+  els.copyValidBtn.textContent = ok ? `Copied ${list.length}` : "Copy failed — use Export CSV";
+  copyTimer = setTimeout(() => { els.copyValidBtn.textContent = copyLabel(); }, ok ? 1500 : 3000);
 });
 
 els.exportBtn.addEventListener("click", async () => {
